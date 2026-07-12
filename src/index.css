@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer base {
+  * {
+    @apply border-slate-200 dark:border-slate-800;
+  }
+  html {
+    @apply scroll-smooth;
+  }
+  body {
+    @apply m-0 bg-slate-50 text-slate-900 antialiased dark:bg-ink dark:text-slate-100;
+  }
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-ink;
+  }
+  button {
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  select {
+    @apply cursor-pointer bg-no-repeat pr-10 transition-colors hover:border-brand-400 disabled:cursor-not-allowed;
+    appearance: none;
+    color-scheme: light;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%230891b2' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
+    background-position: right 0.75rem center;
+    background-size: 1.1rem;
+  }
+  select option,
+  select optgroup {
+    @apply bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100;
+  }
+  select option {
+    padding: 0.75rem 1rem;
+  }
+  .dark select {
+    color-scheme: dark;
+  }
+}
+@layer components {
+  .surface {
+    @apply rounded-2xl border bg-white shadow-sm dark:bg-panel;
+  }
+  .btn {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-semibold transition active:scale-[.98];
+  }
+  .btn-primary {
+    @apply btn bg-brand-500 text-slate-950 hover:bg-brand-400;
+  }
+  .btn-secondary {
+    @apply btn border bg-white hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-800;
+  }
+  .field {
+    @apply min-h-11 w-full rounded-xl border bg-white px-3.5 py-2.5 text-sm shadow-sm placeholder:text-slate-400 hover:shadow-md dark:bg-slate-950;
+  }
+  select.field {
+    @apply pr-10 font-medium;
+  }
+  .label {
+    @apply mb-1.5 block text-sm font-medium;
+  }
+  .muted {
+    @apply text-slate-500 dark:text-slate-400;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold;
+  }
+}
