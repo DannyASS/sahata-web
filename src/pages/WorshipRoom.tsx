@@ -49,6 +49,7 @@ export function WorshipRoom() {
   const [activeSpeaker, setActiveSpeaker] = useState("");
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [incomingAudio, setIncomingAudio] = useState(false);
+  const [memberViewMode, setMemberViewMode] = useState<"Band" | "Singers">("Band");
   const [director, setDirector] = useState(() => Boolean(user) && user?.role !== "Member");
   const [channel, setChannel] = useState("All Team");
   const [activeCue, setActiveCue] = useState("");
@@ -68,7 +69,7 @@ export function WorshipRoom() {
   const joinedMember = (() => { try { return JSON.parse(sessionStorage.getItem("sahata-joined-member") || "null") as { id?: string; role?: string; channel?: string } | null; } catch { return null; } })();
   const memberPeerId = joinedMember?.id ? String(joinedMember.id) : loggedMember?.id ? String(loggedMember.id) : user?.id ? `user-${user.id}` : "guest";
   const clientId = director ? `director-${user?.id || "host"}` : `member-${memberPeerId}`;
-  const viewerRole = joinedMember?.role || user?.role || "Member";
+  const viewerRole = user?.role === "Member" && memberViewMode === "Singers" ? "Singer" : joinedMember?.role || user?.role || "Member";
   const room = state.rooms.find((r) => r.id === id) || state.rooms[0];
   const channels = room?.channels?.length ? ["All Team", ...room.channels.filter(c => c !== "All Team")] : ["All Team"];
   const sendSignal = (targetId: string, type: RoomSignal["type"], data: RoomSignal["data"]) => id ? endpoints.signal(id, { clientId, targetId, type, data }) : Promise.resolve();
@@ -327,6 +328,9 @@ export function WorshipRoom() {
             currentSong={currentSong}
             currentSection={currentSection}
             realtimeConnected={realtimeConnected}
+            allowViewSwitch={user?.role === "Member"}
+            viewMode={memberViewMode}
+            onViewModeChange={value => setMemberViewMode(value as "Band" | "Singers")}
             onLeave={leave}
             onResponse={(text) => {
               show(`${text} response sent`);
@@ -561,6 +565,9 @@ function MemberView({
   currentSong,
   currentSection,
   realtimeConnected,
+  allowViewSwitch,
+  viewMode,
+  onViewModeChange,
 }: {
   activeCue: string;
   cueVisible: boolean;
@@ -573,11 +580,15 @@ function MemberView({
   currentSong: Song | null;
   currentSection: SongSection | null;
   realtimeConnected: boolean;
+  allowViewSwitch: boolean;
+  viewMode: "Band" | "Singers";
+  onViewModeChange: (value: string) => void;
 }) {
   const [volume, setVolume] = useState(72);
   const [lyricSize, setLyricSize] = useState(32);
   const { show } = useToast();
-  const normalizedRole = role.trim().toLowerCase();
+  const effectiveRole = allowViewSwitch && viewMode === "Singers" ? "Singer" : role;
+  const normalizedRole = effectiveRole.trim().toLowerCase();
   const isLyricsViewer = normalizedRole.includes("singer") || normalizedRole === "worship leader" || normalizedRole === "wl";
   const isMusician = ["keyboardist", "guitarist", "bassist", "drummer"].includes(normalizedRole);
   return (
@@ -588,7 +599,7 @@ function MemberView({
         ).map(([a, b]) => (
           <div className="surface p-4" key={a}>
             <p className="text-xs muted">{a}</p>
-            <b className="mt-1 block text-sm">{b}</b>
+            {a === "Your role" && allowViewSwitch ? <ModernSelect className="mt-2" ariaLabel="Member room view" options={["Band", "Singers"].map(value => ({ value }))} value={viewMode} onValueChange={onViewModeChange}/> : <b className="mt-1 block text-sm">{b}</b>}
           </div>
         ))}
       </div>
