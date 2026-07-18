@@ -3,7 +3,7 @@ import { Check, ChevronDown } from "lucide-react";
 
 export type Language = "en" | "id";
 const id: Record<string, string> = {
-  "Dashboard": "Dasbor", "Worship Rooms": "Ruang Ibadah", "Team Members": "Anggota Tim", "Cue Presets": "Preset Cue", "Settings": "Pengaturan", "Master Users": "Master Pengguna", "Role Management": "Manajemen Role",
+  "Dashboard": "Dasbor", "Worship Rooms": "Ruang Ibadah", "Team Members": "Anggota Tim", "Cue Presets": "Preset Cue", "Songs": "Lagu", "Settings": "Pengaturan", "Master Users": "Master Pengguna", "Role Management": "Manajemen Role",
   "Login": "Masuk", "Register": "Daftar", "Join Room": "Gabung Room", "Logout": "Keluar", "Back to landing page": "Kembali ke halaman utama",
   "Welcome back": "Selamat datang kembali", "Connect with your worship team.": "Terhubung dengan tim pelayanan Anda.", "Email": "Email", "Password": "Kata sandi", "Remember me": "Ingat saya", "Forgot password?": "Lupa kata sandi?", "Logging in...": "Sedang masuk...", "Belum punya akun?": "Belum punya akun?",
   "Register account": "Daftar akun", "Akun baru harus disetujui Admin Gereja.": "Akun baru harus disetujui Admin Gereja.", "Full name": "Nama lengkap", "Confirm password": "Konfirmasi kata sandi", "Registering...": "Sedang mendaftar...", "Registrasi diterima": "Registrasi diterima", "Tunggu Admin Gereja menyetujui akun Anda sebelum login.": "Tunggu Admin Gereja menyetujui akun Anda sebelum login.", "Go to login": "Ke halaman masuk",

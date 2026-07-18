@@ -10,6 +10,7 @@ import { Cues } from "./pages/Cues";
 import { Settings } from "./pages/Settings";
 import { WorshipRoom } from "./pages/WorshipRoom";
 import { MasterUsers, RoleManagement } from "./pages/AdminPages";
+import { Songs } from "./pages/Songs";
 function ProtectedApp() {
   const { user } = useAuth();
   return user && localStorage.getItem("sahata-token") ? <AppLayout /> : <Navigate to="/login" replace />;
@@ -37,6 +38,7 @@ export default function App() {
             <Route path="/rooms" element={<Rooms />} />
             <Route path="/team" element={<DirectorOnly><Team /></DirectorOnly>} />
             <Route path="/cues" element={<DirectorOnly><Cues /></DirectorOnly>} />
+            <Route path="/songs" element={<DirectorOnly><Songs /></DirectorOnly>} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/master-users" element={<AdminOnly><MasterUsers /></AdminOnly>} />
             <Route path="/role-management" element={<AdminOnly><RoleManagement /></AdminOnly>} />

@@ -9,6 +9,7 @@ import {
   LogOut,
   ShieldCheck,
   UserCog,
+  Music2,
 } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useState } from "react";
@@ -20,6 +21,7 @@ const baseNav = [
   ["Worship Rooms", "/rooms", Radio],
   ["Team Members", "/team", Users],
   ["Cue Presets", "/cues", SlidersHorizontal],
+  ["Songs", "/songs", Music2],
   ["Settings", "/settings", Settings],
 ] as const;
 export function AppLayout() {

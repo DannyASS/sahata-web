@@ -19,6 +19,10 @@ export interface WorshipRoom {
   members: number;
   channels: string[];
   status: "Scheduled" | "Live" | "Completed";
+  currentSongId?: string;
+  currentSongSectionId?: string;
+  currentSong?: Song;
+  songs: Song[];
 }
 export interface TeamMember {
   id: string;
@@ -43,6 +47,23 @@ export interface Cue {
   channel: string;
   icon?: string;
   vibration?: string;
+  active: boolean;
+}
+export interface SongSection {
+  id: string;
+  songId: string;
+  sectionLabel: string;
+  lyrics: string;
+  displayOrder: number;
+}
+export interface Song {
+  id: string;
+  title: string;
+  artist: string;
+  defaultKey: string;
+  selectedKey?: string;
+  bpm: number;
+  sections: SongSection[];
 }
 export interface ActivityLog {
   id: string;
@@ -52,6 +73,10 @@ export interface ActivityLog {
   message: string;
   target: string;
   received: boolean;
+  songId?: string;
+  songSectionId?: string;
+  song?: Song;
+  songSection?: SongSection;
   createdAt?: string;
   time?: string;
 }

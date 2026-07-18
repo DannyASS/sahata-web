@@ -1,10 +1,11 @@
 import { Plus, Search } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { ConfirmModal, Modal, ModernSelect, PageHeader, RoomCard } from "../components/ui";
 import { useAuth, useRoom, useToast } from "../contexts/AppContexts";
-import type { WorshipRoom } from "../types";
+import type { Song, WorshipRoom } from "../types";
 import { endpoints } from "../lib/api";
+const musicalKeys = ["C", "C#/Db", "D", "D#/Eb", "E", "F", "F#/Gb", "G", "G#/Ab", "A", "A#/Bb", "B", "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "A#m", "Bm"];
 const blank: WorshipRoom = {
   id: "",
   name: "",
@@ -15,6 +16,7 @@ const blank: WorshipRoom = {
   members: 0,
   channels: ["All Team"],
   status: "Scheduled",
+  songs: [],
 };
 export function Rooms() {
   const { state, setRooms } = useRoom();
@@ -25,7 +27,22 @@ export function Rooms() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All");
   const [editing, setEditing] = useState<WorshipRoom | null>(null);
+  const [songCatalog, setSongCatalog] = useState<Song[]>([]);
+  const [roomSongQuery, setRoomSongQuery] = useState("");
+  const [songsLoading, setSongsLoading] = useState(false);
   const [deleting, setDeleting] = useState<WorshipRoom | null>(null);
+  const roomModalOpen = Boolean(editing);
+  useEffect(() => {
+    if (!canManage || !roomModalOpen) return;
+    const timer = window.setTimeout(() => {
+      setSongsLoading(true);
+      endpoints.songs(roomSongQuery.trim()).then(data => setSongCatalog(data || [])).catch(error => {
+        setSongCatalog([]);
+        show(error instanceof Error ? error.message : "Gagal memuat daftar lagu", "error");
+      }).finally(() => setSongsLoading(false));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [canManage, roomModalOpen, roomSongQuery, show]);
   const save = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!editing) return;
@@ -40,10 +57,11 @@ export function Rooms() {
       code: String(data.get("code")),
       status: String(data.get("status")) as WorshipRoom["status"],
       channels: data.getAll("channels").map(String),
+      songs: editing.songs || [],
     };
     try {
-      const saved = editing.id ? await endpoints.updateRoom(room) : await endpoints.createRoom({ name: room.name, date: room.date, startTime: room.startTime, endTime: room.endTime, code: room.code, status: room.status, channels: room.channels });
-      setRooms(x => editing.id ? x.map(r => r.id === saved.id ? saved : r) : [saved, ...x]); setEditing(null); show(editing.id ? "Room updated" : "Room created");
+      const saved = editing.id ? await endpoints.updateRoom(room) : await endpoints.createRoom({ name: room.name, date: room.date, startTime: room.startTime, endTime: room.endTime, code: room.code, status: room.status, channels: room.channels, songs: room.songs });
+      setRooms(x => editing.id ? x.map(r => r.id === saved.id ? saved : r) : [saved, ...x]); setEditing(null); setRoomSongQuery(""); show(editing.id ? "Room updated" : "Room created");
     } catch (error) { show(error instanceof Error ? error.message : "Gagal menyimpan room", "error"); }
   };
   const list = state.rooms.filter(
@@ -59,7 +77,7 @@ export function Rooms() {
         action={canManage ?
           <button
             className="btn-primary"
-            onClick={() => setEditing({ ...blank })}
+            onClick={() => setEditing({ ...blank, songs: [] })}
           >
             <Plus size={18} /> Create room
           </button>
@@ -83,7 +101,7 @@ export function Rooms() {
             key={r.id}
             room={r}
             onJoin={() => nav(`/room/${r.id}`)}
-            onEdit={canManage ? () => setEditing({ ...r }) : undefined}
+            onEdit={canManage ? () => setEditing({ ...r, songs: [...(r.songs || [])] }) : undefined}
             onDelete={canManage ? () => setDeleting(r) : undefined}
           />
         ))}
@@ -91,7 +109,7 @@ export function Rooms() {
       <Modal
         open={!!editing}
         title={editing?.id ? "Edit worship room" : "Create worship room"}
-        onClose={() => setEditing(null)}
+        onClose={() => { setEditing(null); setRoomSongQuery(""); }}
       >
         {editing && (
           <form onSubmit={save} className="space-y-4">
@@ -140,6 +158,7 @@ export function Rooms() {
             </div>
             <label><span className="label">Status</span><ModernSelect name="status" options={["Scheduled", "Live", "Completed"].map(value => ({ value }))} defaultValue={editing.status} /></label>
             <fieldset><legend className="label">Channels</legend><div className="flex flex-wrap gap-3">{["All Team", "Band", "Vocal", "Production", "Multimedia", "Sound"].map(c => <label key={c} className="flex gap-2 text-sm"><input type="checkbox" name="channels" value={c} defaultChecked={editing.channels.includes(c)} />{c}</label>)}</div></fieldset>
+            <fieldset><legend className="label">Songs for this room</legend><label className="relative mb-3 block"><Search className="absolute left-3 top-3.5 muted" size={17}/><input className="field !pl-10" value={roomSongQuery} onChange={event => setRoomSongQuery(event.target.value)} placeholder="Search song title..."/></label>{songsLoading ? <p className="rounded-xl border p-4 text-center text-sm muted">Searching songs...</p> : songCatalog.length ? <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border p-3">{songCatalog.map(song => { const selected = editing.songs?.find(item => String(item.id) === String(song.id)); const checked = Boolean(selected); const selectedKey = selected?.selectedKey || selected?.defaultKey || song.defaultKey; return <div key={song.id} className={`grid items-center gap-2 rounded-lg p-2 text-sm transition sm:grid-cols-[1fr_120px] ${checked ? "bg-brand-500/10 text-brand-500" : "hover:bg-slate-100 dark:hover:bg-slate-900"}`}><label className="flex cursor-pointer items-center gap-3"><input type="checkbox" checked={checked} onChange={event => setEditing(current => current ? { ...current, songs: event.target.checked ? [...(current.songs || []), { ...song, selectedKey: song.defaultKey }] : (current.songs || []).filter(item => String(item.id) !== String(song.id)) } : current)}/><span className="min-w-0"><b className="block truncate">{song.title}</b><span className="text-xs muted">{song.artist} • Default {song.defaultKey}</span></span></label>{checked && <ModernSelect ariaLabel={`Key for ${song.title}`} options={[...new Set([selectedKey, ...musicalKeys])].map(value => ({ value }))} value={selectedKey} onValueChange={value => setEditing(current => current ? { ...current, songs: (current.songs || []).map(item => String(item.id) === String(song.id) ? { ...item, selectedKey: value } : item) } : current)}/>}</div>; })}</div> : <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">{roomSongQuery.trim() ? "Lagu tidak ditemukan." : "Belum ada lagu. Tambahkan lagu dari menu Songs terlebih dahulu."}</p>}<p className="mt-2 text-xs muted">{editing.songs?.length || 0} song(s) selected</p></fieldset>
             <button className="btn-primary w-full">Save room</button>
           </form>
         )}

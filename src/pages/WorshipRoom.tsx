@@ -30,8 +30,9 @@ import {
 } from "../components/ui";
 import { useAuth, useRoom, useToast } from "../contexts/AppContexts";
 import { endpoints, roomEventsUrl, type RoomSignal } from "../lib/api";
-import type { ActivityLog, Cue, Status, TeamMember } from "../types";
+import type { ActivityLog, Cue, Song, SongSection, Status, TeamMember, WorshipRoom as WorshipRoomType } from "../types";
 const peerConfig: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+const serviceRoles = ["Worship Leader", "Singer", "Keyboardist", "Guitarist", "Bassist", "Drummer", "Sound Engineer", "Multimedia", "Lighting", "Stage Manager", "Member"];
 export function WorshipRoom() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -39,6 +40,10 @@ export function WorshipRoom() {
   const { user } = useAuth();
   const { show } = useToast();
   const [cues, setCues] = useState<Cue[]>([]);
+  const [songs, setSongs] = useState<Song[]>([]);
+  const [currentSong, setCurrentSong] = useState<Song | null>(null);
+  const [currentSection, setCurrentSection] = useState<SongSection | null>(null);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
   const [loggedMember, setLoggedMember] = useState<TeamMember | null>(null);
   const [activeDirectors, setActiveDirectors] = useState<{ clientId: string; name: string; role: string }[]>([]);
   const [activeSpeaker, setActiveSpeaker] = useState("");
@@ -49,7 +54,7 @@ export function WorshipRoom() {
   const [activeCue, setActiveCue] = useState("");
   const [cueSender, setCueSender] = useState({ name: "Music Director", role: "Music Director" });
   const [cueVisible, setCueVisible] = useState(false);
-  const [repeat, setRepeat] = useState(2);
+  const [repeat, setRepeat] = useState(1);
   const [talking, setTalking] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const timer = useRef<number | undefined>(undefined);
@@ -63,6 +68,7 @@ export function WorshipRoom() {
   const joinedMember = (() => { try { return JSON.parse(sessionStorage.getItem("sahata-joined-member") || "null") as { id?: string; role?: string; channel?: string } | null; } catch { return null; } })();
   const memberPeerId = joinedMember?.id ? String(joinedMember.id) : loggedMember?.id ? String(loggedMember.id) : user?.id ? `user-${user.id}` : "guest";
   const clientId = director ? `director-${user?.id || "host"}` : `member-${memberPeerId}`;
+  const viewerRole = joinedMember?.role || user?.role || "Member";
   const room = state.rooms.find((r) => r.id === id) || state.rooms[0];
   const channels = room?.channels?.length ? ["All Team", ...room.channels.filter(c => c !== "All Team")] : ["All Team"];
   const sendSignal = (targetId: string, type: RoomSignal["type"], data: RoomSignal["data"]) => id ? endpoints.signal(id, { clientId, targetId, type, data }) : Promise.resolve();
@@ -132,7 +138,8 @@ export function WorshipRoom() {
       })().catch(error => show(error instanceof Error ? error.message : "Koneksi audio gagal", "error"));
     };
   });
-  useEffect(() => { endpoints.cues().then(setCues).catch(() => setCues([])); }, []);
+  useEffect(() => { endpoints.cues().then(data => setCues((data || []).filter(cue => cue.active))).catch(() => setCues([])); }, []);
+  useEffect(() => { let cancelled = false; Promise.resolve().then(() => { if (!cancelled) { setSongs(room?.songs || []); setCurrentSong(room?.currentSong || null); setCurrentSection(room?.currentSong?.sections.find(s => String(s.id) === String(room.currentSongSectionId)) || null); } }); return () => { cancelled = true; }; }, [room?.songs, room?.currentSong, room?.currentSongSectionId]);
   useEffect(() => {
     if (!id) return; endpoints.directors(id).then(setActiveDirectors).catch(() => setActiveDirectors([]));
     if (director) endpoints.enterDirectorPresence(id).then(result => setActiveDirectors(result.directors)).catch(error => show(error instanceof Error ? error.message : "Gagal mendaftarkan director", "error"));
@@ -148,12 +155,16 @@ export function WorshipRoom() {
   useEffect(() => {
     if (!id) return;
     const events = new EventSource(roomEventsUrl(id));
+    events.onopen = () => setRealtimeConnected(true);
     let hideTimer: number | undefined;
     events.addEventListener("cue", event => {
       const activity = JSON.parse((event as MessageEvent).data) as ActivityLog;
+      const targetRole = activity.target.startsWith("Role: ") ? activity.target.slice(6) : "";
+      if (targetRole && targetRole !== viewerRole) return;
       setActiveCue(activity.message.toUpperCase());
       setCueSender({ name: activity.sender, role: activity.senderRole || "Music Director" });
       setCueVisible(true);
+      if (activity.songSection && activity.song) { setCurrentSong(activity.song); setCurrentSection(activity.songSection); }
       window.clearTimeout(hideTimer);
       hideTimer = window.setTimeout(() => setCueVisible(false), 5000);
       if (navigator.vibrate) navigator.vibrate([180, 80, 180]);
@@ -166,9 +177,10 @@ export function WorshipRoom() {
     });
     events.addEventListener("director", event => { const data = JSON.parse((event as MessageEvent).data) as { directors: { clientId: string; name: string; role: string }[] }; setActiveDirectors(data.directors || []); });
     events.addEventListener("speaker", event => { const data = JSON.parse((event as MessageEvent).data) as { clientId: string }; setActiveSpeaker(data.clientId || ""); });
-    events.onerror = () => console.warn("Koneksi realtime cue terputus; browser akan mencoba tersambung kembali.");
-    return () => { window.clearTimeout(hideTimer); events.close(); };
-  }, [id, setMembers]);
+    events.addEventListener("room-state", event => { const next = JSON.parse((event as MessageEvent).data) as WorshipRoomType; setSongs(next.songs || []); setCurrentSong(next.currentSong || null); setCurrentSection(next.currentSong?.sections.find(s => String(s.id) === String(next.currentSongSectionId)) || null); });
+    events.onerror = () => { setRealtimeConnected(false); console.warn("Koneksi realtime cue terputus; browser akan mencoba tersambung kembali."); };
+    return () => { setRealtimeConnected(false); window.clearTimeout(hideTimer); events.close(); };
+  }, [id, setMembers, viewerRole]);
   // Receiver negotiation intentionally reuses the latest signaling callback.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (!id) return; const connect = () => activeDirectors.forEach(item => { if (item.clientId !== clientId) void connectToDirector(item.clientId); }); const timeout = window.setTimeout(connect, 300); const retry = window.setInterval(connect, 5000); return () => { window.clearTimeout(timeout); window.clearInterval(retry); }; }, [id, clientId, activeDirectors]);
@@ -184,14 +196,16 @@ export function WorshipRoom() {
     return () => clearInterval(timer.current);
   }, [talking]);
   useEffect(() => { micStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = talking; }); }, [talking]);
-  const sendCue = async (label: string) => {
+  const sendCue = async (label: string, songSection?: SongSection, targetOverride?: string) => {
     const message = `${label}${repeat > 1 && ["Bridge", "Chorus", "Repeat"].includes(label) ? ` ×${repeat}` : ""}`;
     if (!room) return;
     try {
-      const created = await endpoints.createActivity({ roomId: room.id, sender: user?.name || "Music Director", senderRole: user?.role || "Music Director", message, target: channel, received: true });
+      const target = targetOverride || channel;
+      const created = await endpoints.createActivity({ roomId: room.id, sender: user?.name || "Music Director", senderRole: user?.role || "Music Director", message, target, received: true, songId: songSection ? currentSong?.id : undefined, songSectionId: songSection?.id });
+      if (songSection && currentSong) { await endpoints.setRoomSongState(room.id, currentSong.id, songSection.id); setCurrentSection(songSection); }
       setActivity(current => [created, ...current]);
       setActiveCue(message.toUpperCase()); setCueSender({ name: user?.name || "Music Director", role: user?.role || "Music Director" }); setCueVisible(true);
-      show(`${message} sent to ${channel}`); window.setTimeout(() => setCueVisible(false), 5000);
+      show(`${message} sent to ${target}`); window.setTimeout(() => setCueVisible(false), 5000);
     } catch (error) { show(error instanceof Error ? error.message : "Cue gagal dikirim", "error"); }
   };
   const leave = async () => {
@@ -297,6 +311,10 @@ export function WorshipRoom() {
             repeat={repeat}
             setRepeat={setRepeat}
             activeSpeaker={activeSpeaker}
+            songs={songs}
+            currentSong={currentSong}
+            currentSection={currentSection}
+            onSongChange={async songId => { const song = songs.find(item => String(item.id) === String(songId)) || null; setCurrentSong(song); setCurrentSection(null); if (room) await endpoints.setRoomSongState(room.id, song?.id).catch(error => show(error instanceof Error ? error.message : "Failed to select song", "error")); }}
           />
         ) : (
           <MemberView
@@ -306,6 +324,9 @@ export function WorshipRoom() {
             role={joinedMember?.role || "Member"}
             channel={joinedMember?.channel || "All Team"}
             guest={!user || user.role === "Member"}
+            currentSong={currentSong}
+            currentSection={currentSection}
+            realtimeConnected={realtimeConnected}
             onLeave={leave}
             onResponse={(text) => {
               show(`${text} response sent`);
@@ -341,10 +362,14 @@ type DirectorProps = {
   setChannel: (v: string) => void;
   activeCue: string;
   cueVisible: boolean;
-  sendCue: (v: string) => void;
+  sendCue: (v: string, section?: SongSection, targetOverride?: string) => void;
   repeat: number;
   setRepeat: (v: number) => void;
   activeSpeaker: string;
+  songs: Song[];
+  currentSong: Song | null;
+  currentSection: SongSection | null;
+  onSongChange: (songId: string) => void;
 };
 function DirectorView(p: DirectorProps) {
   const { state } = useRoom();
@@ -432,11 +457,12 @@ function DirectorView(p: DirectorProps) {
               <ModernSelect className="w-20" options={["1", "2", "3", "4"].map(value => ({ value }))} value={p.repeat} onValueChange={value => p.setRepeat(Number(value))} />
             </label>
           </div>
+          <div className="mt-4 grid max-w-2xl items-end gap-3 sm:grid-cols-[1fr_auto]"><label><span className="label">Current Song</span><ModernSelect options={[{value:"",label:"Select a song from room setlist"},...p.songs.map(song=>({value:String(song.id),label:song.title}))]} value={p.currentSong?.id ? String(p.currentSong.id) : ""} onValueChange={p.onSongChange}/></label>{p.currentSong && <div className="rounded-xl border border-brand-500/40 bg-brand-500/10 px-5 py-3 text-center"><span className="block text-[10px] font-semibold uppercase text-brand-500">Song Key</span><b className="text-xl">{p.currentSong.selectedKey || p.currentSong.defaultKey}</b></div>}{!p.songs.length && <p className="text-sm text-amber-500">No songs were added to this room.</p>}</div>
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {p.cues.map((c) => (
               <button
                 key={c.id}
-                onClick={() => p.sendCue(c.label)}
+                onClick={() => p.sendCue(c.label, p.currentSong?.sections.find(section => section.sectionLabel.trim().toLowerCase() === c.label.trim().toLowerCase()))}
                 className={`min-h-16 rounded-xl border p-3 font-bold transition hover:-translate-y-0.5 active:scale-95 ${c.priority === "Emergency" ? "border-red-500/40 bg-red-500/10 text-red-500" : "bg-slate-50 hover:border-brand-500 dark:bg-slate-900"}`}
               >
                 {c.label}
@@ -456,7 +482,7 @@ function DirectorView(p: DirectorProps) {
             </label>
           </div>
         </div>
-        <CustomCue onSend={p.sendCue} />
+        <CustomCue roles={[...new Set([...serviceRoles, ...state.members.map(member => member.role)])]} onSend={(message, role) => p.sendCue(message, undefined, role === "All Roles" ? "All Roles" : `Role: ${role}`)} />
         <section>
           <h2 className="mb-3 text-lg font-bold">Connected members</h2>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -494,12 +520,13 @@ function DirectorView(p: DirectorProps) {
     </div>
   );
 }
-function CustomCue({ onSend }: { onSend: (s: string) => void }) {
+function CustomCue({ onSend, roles }: { onSend: (message: string, role: string) => void; roles: string[] }) {
   const [msg, setMsg] = useState("");
+  const [role, setRole] = useState("All Roles");
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (msg.trim()) {
-      onSend(msg);
+      onSend(msg, role);
       setMsg("");
     }
   };
@@ -514,7 +541,7 @@ function CustomCue({ onSend }: { onSend: (s: string) => void }) {
           onChange={(e) => setMsg(e.target.value)}
           required
         />
-        <ModernSelect options={["Normal priority", "High priority", "Emergency"].map(value => ({ value }))} />
+        <ModernSelect ariaLabel="Target role" options={["All Roles", ...roles].map(value => ({ value }))} value={role} onValueChange={setRole} />
         <button className="btn-primary">
           <Send size={17} /> Send
         </button>
@@ -531,6 +558,9 @@ function MemberView({
   guest,
   onLeave,
   onResponse,
+  currentSong,
+  currentSection,
+  realtimeConnected,
 }: {
   activeCue: string;
   cueVisible: boolean;
@@ -540,19 +570,21 @@ function MemberView({
   guest: boolean;
   onLeave: () => void;
   onResponse: (s: string) => void;
+  currentSong: Song | null;
+  currentSection: SongSection | null;
+  realtimeConnected: boolean;
 }) {
   const [volume, setVolume] = useState(72);
+  const [lyricSize, setLyricSize] = useState(32);
   const { show } = useToast();
+  const normalizedRole = role.trim().toLowerCase();
+  const isLyricsViewer = normalizedRole.includes("singer") || normalizedRole === "worship leader" || normalizedRole === "wl";
+  const isMusician = ["keyboardist", "guitarist", "bassist", "drummer"].includes(normalizedRole);
   return (
     <div className="mx-auto max-w-3xl space-y-5">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3">
         {(
-          [
-            ["Connection", "Excellent"],
-            ["Your role", role],
-            ["Channel", channel],
-            ["Audio", "Good"],
-          ] as const
+          isLyricsViewer ? [["Your role", role], ["Channel", channel]] as const : [["Connection", realtimeConnected ? "Connected" : "Reconnecting"], ["Your role", role], ["Channel", channel], ["Audio", "Good"]] as const
         ).map(([a, b]) => (
           <div className="surface p-4" key={a}>
             <p className="text-xs muted">{a}</p>
@@ -560,7 +592,10 @@ function MemberView({
           </div>
         ))}
       </div>
-      <div
+      {isMusician && <div className="surface grid grid-cols-[1fr_auto] items-center gap-4 border-brand-500/40 p-5"><div><p className="text-xs font-semibold uppercase tracking-wider text-brand-500">Current Song</p><h2 className="mt-1 text-xl font-bold">{currentSong?.title || "Waiting for song"}</h2><p className="text-sm muted">{currentSong?.artist || "The MD will select the current song"}</p></div><div className="min-w-20 rounded-xl bg-brand-500/10 p-3 text-center"><span className="block text-[10px] font-semibold uppercase text-brand-500">Key</span><b className="text-2xl">{currentSong ? currentSong.selectedKey || currentSong.defaultKey : "—"}</b></div></div>}
+      {isLyricsViewer && cueVisible && <div className="surface border-brand-500 bg-brand-500/5 px-5 py-4 text-center shadow-glow"><p className="text-xs font-semibold text-brand-500">ACTIVE CUE • {channel}</p><h2 className="mt-1 text-2xl font-black sm:text-3xl">{activeCue}</h2></div>}
+      {isLyricsViewer && <div className="surface overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b p-5"><div><p className="text-xs font-semibold uppercase tracking-wider text-brand-500">Realtime Lyrics</p><h2 className="mt-1 text-xl font-bold">{currentSong?.title || "Waiting for song"}</h2><p className="text-sm muted">{currentSong?.artist || "The MD will select the current song"}</p></div><div className="flex items-center gap-2"><span className={`chip ${realtimeConnected?"bg-emerald-500/15 text-emerald-500":"bg-amber-500/15 text-amber-500"}`}>{realtimeConnected?"Connected":"Reconnecting"}</span><button className="btn-secondary !h-10 !w-10 !p-0" onClick={()=>setLyricSize(x=>Math.max(20,x-2))}>A-</button><button className="btn-secondary !h-10 !w-10 !p-0" onClick={()=>setLyricSize(x=>Math.min(56,x+2))}>A+</button></div></div><div className="min-h-[320px] p-6 text-center sm:p-10"><p className="mb-5 text-sm font-bold uppercase tracking-[.2em] text-brand-500">{currentSection?.sectionLabel || "Standby"}</p><div className="whitespace-pre-line font-semibold leading-relaxed" style={{fontSize:lyricSize}}>{currentSection?.lyrics || "Lyrics will appear when the MD sends a song section cue."}</div></div></div>}
+      {!isLyricsViewer && <div
         className={`surface relative grid min-h-[360px] place-items-center overflow-hidden p-8 text-center ${cueVisible ? "border-brand-500 shadow-glow" : ""}`}
       >
         <div
@@ -579,7 +614,7 @@ function MemberView({
             </p>
           )}
         </div>
-      </div>
+      </div>}
       {!guest && <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {(
           [

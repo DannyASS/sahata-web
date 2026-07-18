@@ -33,11 +33,12 @@ export function Cues() {
       priority: String(data.get("priority")) as Cue["priority"],
       channel: String(data.get("channel")),
       vibration: String(data.get("vibration")),
+      active: data.get("active") === "on",
     };
     try {
       const saved = edit.id
         ? await endpoints.updateCue({ ...next, sortOrder: list.findIndex(c => c.id === edit.id) + 1 })
-        : await endpoints.createCue({ label: next.label, category: next.category, priority: next.priority, channel: next.channel, vibration: next.vibration, sortOrder: list.length + 1 });
+        : await endpoints.createCue({ label: next.label, category: next.category, priority: next.priority, channel: next.channel, vibration: next.vibration, active: next.active, sortOrder: list.length + 1 });
       setList(current => edit.id ? current.map(cue => cue.id === saved.id ? saved : cue) : [...current, saved]);
       setEdit(null);
       show("Cue preset saved");
@@ -59,6 +60,7 @@ export function Cues() {
                 priority: "Normal",
                 channel: "All Team",
                 vibration: "Short pulse",
+                active: true,
               })
             }
           >
@@ -85,14 +87,14 @@ export function Cues() {
       </div>
       <div className="grid gap-3 lg:grid-cols-2">
         {list.map((c, i) => (
-          <article className="surface flex items-center gap-3 p-4" key={c.id}>
+          <article className={`surface flex items-center gap-3 p-4 ${c.active ? "" : "opacity-60"}`} key={c.id}>
             <span
               className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${c.priority === "Emergency" ? "bg-red-500/15 text-red-500" : "bg-brand-500/10 text-brand-500"}`}
             >
               <Zap size={19} />
             </span>
             <div className="min-w-0 flex-1">
-              <h3 className="font-semibold">{c.label}</h3>
+              <div className="flex items-center gap-2"><h3 className="font-semibold">{c.label}</h3><span className={`chip text-[10px] ${c.active ? "bg-emerald-500/15 text-emerald-500" : "bg-slate-500/15 text-slate-500"}`}>{c.active ? "Active" : "Inactive"}</span></div>
               <p className="truncate text-xs muted">
                 {c.category} • {c.channel} • {c.vibration}
               </p>
@@ -170,6 +172,7 @@ export function Cues() {
                 <ModernSelect name="vibration" defaultValue={edit.vibration} options={["Short pulse", "Double pulse", "Long pulse", "None"].map(value => ({ value }))} />
               </label>
             </div>
+            <label className="flex items-center justify-between rounded-xl border p-3"><span><b className="block text-sm">Active preset</b><span className="text-xs muted">Only active presets appear inside live rooms.</span></span><input type="checkbox" name="active" defaultChecked={edit.active} className="h-5 w-5 accent-cyan-500" /></label>
             <button className="btn-primary w-full">Save preset</button>
           </form>
         )}
