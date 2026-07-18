@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Headphones, Mic2, Speaker, CheckCircle2 } from "lucide-react";
 import { Brand, ModernSelect, ThemeToggle } from "../components/ui";
 import { useAuth, useRoom, useToast } from "../contexts/AppContexts";
@@ -90,6 +90,8 @@ export function Register() {
 }
 export function JoinRoom() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
+  const invitationCode = (searchParams.get("code") || "").trim().toUpperCase();
   const { show } = useToast();
   const { setRooms, setMembers } = useRoom();
   const [testing, setTesting] = useState("");
@@ -125,11 +127,14 @@ export function JoinRoom() {
           <label>
             <span className="label">Room code</span>
             <input
-              className="field uppercase"
-              name="code"
+              className="field uppercase disabled:cursor-not-allowed disabled:bg-slate-100 disabled:opacity-70 dark:disabled:bg-slate-900"
+              name={invitationCode ? undefined : "code"}
               required
+              disabled={Boolean(invitationCode)}
+              defaultValue={invitationCode}
               placeholder="Masukkan kode room"
             />
+            {invitationCode && <input type="hidden" name="code" value={invitationCode} />}
           </label>
           <label>
             <span className="label">Display name</span>
