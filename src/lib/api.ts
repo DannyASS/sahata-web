@@ -1,6 +1,6 @@
 const API_URL = (import.meta.env.VITE_API_URL || "http://localhost:8080/api/v1").replace(/\/$/, "");
 export const roomEventsUrl = (roomId: string) => `${API_URL}/rooms/${encodeURIComponent(roomId)}/events`;
-export type RoomSignal = { clientId: string; targetId: string; type: "offer" | "answer" | "ice"; data: RTCSessionDescriptionInit | RTCIceCandidateInit };
+export type LiveKitConnection = { url: string; token: string };
 
 type Envelope<T> = { data: T };
 
@@ -32,7 +32,6 @@ export const endpoints = {
   register: (input: { name: string; email: string; password: string }) => api<{ user: import("../types").User; message: string }>("/auth/register", { method: "POST", body: JSON.stringify(input) }),
   users: () => api<import("../types").User[]>("/users"),
   updateUserAccess: (id: string, role: string, status: import("../types").User["status"]) => api<import("../types").User>(`/users/${id}`, { method: "PUT", body: JSON.stringify({ role, status }) }),
-  signal: (roomId: string, signal: RoomSignal) => api(`/rooms/${encodeURIComponent(roomId)}/signals`, { method: "POST", body: JSON.stringify(signal) }),
   leaveRoom: (roomId: string, memberId: string) => api(`/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(memberId)}`, { method: "DELETE" }),
   enterMemberPresence: (roomId: string, channel = "All Team") => api<import("../types").TeamMember>(`/rooms/${encodeURIComponent(roomId)}/presence`, { method: "POST", body: JSON.stringify({ channel, headset: true }) }),
   leaveMemberPresence: (roomId: string) => api(`/rooms/${encodeURIComponent(roomId)}/presence`, { method: "DELETE" }),
@@ -40,6 +39,8 @@ export const endpoints = {
   leaveDirectorPresence: (roomId: string) => api(`/rooms/${encodeURIComponent(roomId)}/director-presence`, { method: "DELETE" }),
   speakerLock: (roomId: string, action: "acquire" | "release") => api<{ granted: boolean; clientId: string }>(`/rooms/${encodeURIComponent(roomId)}/speaker-lock`, { method: "POST", body: JSON.stringify({ action }) }),
   directors: (roomId: string) => api<{ clientId: string; name: string; role: string }[]>(`/rooms/${encodeURIComponent(roomId)}/directors`),
+  livekitToken: (roomId: string) => api<LiveKitConnection>(`/rooms/${encodeURIComponent(roomId)}/livekit-token`, { method: "POST", body: "{}" }),
+  guestLivekitToken: (roomId: string, memberId: string) => api<LiveKitConnection>(`/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(memberId)}/livekit-token`, { method: "POST", body: "{}" }),
   join: (input: { code: string; name: string; role: string; channel: string; headset: boolean }) => api<{ room: import("../types").WorshipRoom; member: import("../types").TeamMember }>("/join", { method: "POST", body: JSON.stringify(input) }),
   login: (email: string, password: string) => api<{ user: import("../types").User; token: string }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   rooms: () => api<import("../types").WorshipRoom[]>("/rooms"),

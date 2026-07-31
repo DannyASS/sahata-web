@@ -20,6 +20,7 @@ import {
   type FormEvent,
 } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { ConnectionState, Room as LiveKitRoom, RoomEvent, Track } from "livekit-client";
 import {
   Brand,
   ConnectionIndicator,
@@ -29,10 +30,28 @@ import {
   ThemeToggle,
 } from "../components/ui";
 import { useAuth, useRoom, useToast } from "../contexts/AppContexts";
-import { endpoints, roomEventsUrl, type RoomSignal } from "../lib/api";
-import type { ActivityLog, Cue, Song, SongSection, Status, TeamMember, WorshipRoom as WorshipRoomType } from "../types";
-const peerConfig: RTCConfiguration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+import { endpoints, roomEventsUrl } from "../lib/api";
+import type { ActivityLog, Cue, Song, SongSection, TeamMember, WorshipRoom as WorshipRoomType } from "../types";
 const serviceRoles = ["Worship Leader", "Singer", "Keyboardist", "Guitarist", "Bassist", "Drummer", "Sound Engineer", "Multimedia", "Lighting", "Stage Manager", "Member"];
+function microphoneAccessError(): string | null {
+  if (!window.isSecureContext) {
+    return "Microphone hanya dapat digunakan melalui HTTPS atau localhost. Buka web dengan https:// lalu coba lagi.";
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return "Browser tidak menyediakan akses microphone. Periksa izin microphone pada browser dan pastikan halaman tidak dibuka dari embedded browser.";
+  }
+  return null;
+}
+
+function microphonePublishError(error: unknown): string {
+  if (error instanceof DOMException) {
+    if (error.name === "NotAllowedError") return "Izin microphone ditolak. Izinkan microphone dari pengaturan browser lalu coba lagi.";
+    if (error.name === "NotFoundError") return "Microphone tidak ditemukan pada perangkat ini.";
+    if (error.name === "NotReadableError") return "Microphone sedang digunakan aplikasi lain atau tidak dapat dibaca.";
+  }
+  return error instanceof Error ? error.message : "Gagal mengaktifkan microphone";
+}
+
 export function WorshipRoom() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -44,8 +63,7 @@ export function WorshipRoom() {
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [currentSection, setCurrentSection] = useState<SongSection | null>(null);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
-  const [loggedMember, setLoggedMember] = useState<TeamMember | null>(null);
-  const [activeDirectors, setActiveDirectors] = useState<{ clientId: string; name: string; role: string }[]>([]);
+  const [livekitConnected, setLivekitConnected] = useState(false);
   const [activeSpeaker, setActiveSpeaker] = useState("");
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [incomingAudio, setIncomingAudio] = useState(false);
@@ -59,100 +77,84 @@ export function WorshipRoom() {
   const [talking, setTalking] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const timer = useRef<number | undefined>(undefined);
-  const directorAudioRef = useRef(new Map<string, HTMLAudioElement>());
-  const peersRef = useRef(new Map<string, RTCPeerConnection>());
-  const peerStatsTimersRef = useRef(new Map<string, number>());
-  const peerDisconnectTimersRef = useRef(new Map<string, number>());
-  const micStreamRef = useRef<MediaStream | null>(null);
-  const pendingIceRef = useRef(new Map<string, RTCIceCandidateInit[]>());
-  const signalHandlerRef = useRef<(signal: RoomSignal) => void>(() => {});
+  const livekitRoomRef = useRef<LiveKitRoom | null>(null);
+  const livekitAudioElementsRef = useRef(new Set<HTMLMediaElement>());
   const joinedMember = (() => { try { return JSON.parse(sessionStorage.getItem("sahata-joined-member") || "null") as { id?: string; role?: string; channel?: string } | null; } catch { return null; } })();
-  const memberPeerId = joinedMember?.id ? String(joinedMember.id) : loggedMember?.id ? String(loggedMember.id) : user?.id ? `user-${user.id}` : "guest";
-  const clientId = director ? `director-${user?.id || "host"}` : `member-${memberPeerId}`;
+  const guestMemberId = joinedMember?.id ? String(joinedMember.id) : "";
   const viewerRole = user?.role === "Member" && memberViewMode === "Singers" ? "Singer" : joinedMember?.role || user?.role || "Member";
   const room = state.rooms.find((r) => r.id === id) || state.rooms[0];
   const channels = room?.channels?.length ? ["All Team", ...room.channels.filter(c => c !== "All Team")] : ["All Team"];
-  const sendSignal = (targetId: string, type: RoomSignal["type"], data: RoomSignal["data"]) => id ? endpoints.signal(id, { clientId, targetId, type, data }) : Promise.resolve();
-  const flushIce = async (peerId: string, peer: RTCPeerConnection) => { for (const candidate of pendingIceRef.current.get(peerId) || []) await peer.addIceCandidate(candidate); pendingIceRef.current.delete(peerId); };
-  const peerMemberId = (peerId: string) => peerId.replace(/^member-/, "");
-  const updatePeerStatus = (peerId: string, status: Status) => setMembers(current => current.map(member => String(member.id) === peerMemberId(peerId) ? { ...member, status, lastActive: new Date().toISOString() } : member));
-  const stopPeerMonitoring = (peerId: string) => {
-    window.clearInterval(peerStatsTimersRef.current.get(peerId)); peerStatsTimersRef.current.delete(peerId);
-    window.clearTimeout(peerDisconnectTimersRef.current.get(peerId)); peerDisconnectTimersRef.current.delete(peerId);
-  };
-  const monitorPeerQuality = (peerId: string, peer: RTCPeerConnection) => {
-    window.clearInterval(peerStatsTimersRef.current.get(peerId));
-    const timer = window.setInterval(() => { void peer.getStats().then(stats => {
-      let weak = false;
-      stats.forEach(raw => {
-        const report = raw as RTCStats & { kind?: string; roundTripTime?: number; jitter?: number; packetsLost?: number; packetsReceived?: number };
-        if (report.type !== "remote-inbound-rtp" || report.kind !== "audio") return;
-        const total = (report.packetsReceived || 0) + (report.packetsLost || 0);
-        const loss = total > 0 ? (report.packetsLost || 0) / total : 0;
-        weak ||= loss > 0.05 || (report.jitter || 0) > 0.05 || (report.roundTripTime || 0) > 0.3;
-      });
-      if (peer.connectionState === "connected") updatePeerStatus(peerId, weak ? "weak" : "connected");
-    }).catch(() => updatePeerStatus(peerId, "weak")); }, 5000);
-    peerStatsTimersRef.current.set(peerId, timer);
-  };
-  const ensureMicStream = async () => {
-    if (micStreamRef.current?.active) return micStreamRef.current;
-    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error("Microphone diblokir browser. Buka halaman MD melalui http://localhost:5173 atau gunakan HTTPS.");
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-    stream.getAudioTracks().forEach(track => { track.enabled = false; }); micStreamRef.current = stream; return stream;
-  };
-  const createDirectorPeer = async (memberId: string, offer: RTCSessionDescriptionInit) => {
-    const stream = await ensureMicStream();
-    stream.getAudioTracks().forEach(track => { track.enabled = talking; });
-    stopPeerMonitoring(memberId); peersRef.current.get(memberId)?.close();
-    const peer = new RTCPeerConnection(peerConfig); peersRef.current.set(memberId, peer);
-    updatePeerStatus(memberId, "weak");
-    stream.getAudioTracks().forEach(track => peer.addTrack(track, stream!));
-    peer.onicecandidate = event => { if (event.candidate) void sendSignal(memberId, "ice", event.candidate.toJSON()); };
-    const trackConnection = () => {
-      const state = peer.connectionState;
-      if (state === "connected") { window.clearTimeout(peerDisconnectTimersRef.current.get(memberId)); peerDisconnectTimersRef.current.delete(memberId); updatePeerStatus(memberId, "connected"); monitorPeerQuality(memberId, peer); }
-      else if (state === "failed" || state === "closed") { stopPeerMonitoring(memberId); updatePeerStatus(memberId, "disconnected"); }
-      else if (state === "disconnected") { updatePeerStatus(memberId, "weak"); window.clearTimeout(peerDisconnectTimersRef.current.get(memberId)); peerDisconnectTimersRef.current.set(memberId, window.setTimeout(() => { if (peer.connectionState === "disconnected") updatePeerStatus(memberId, "disconnected"); }, 8000)); }
-      else updatePeerStatus(memberId, "weak");
-    };
-    peer.onconnectionstatechange = trackConnection;
-    peer.oniceconnectionstatechange = trackConnection;
-    await peer.setRemoteDescription(offer); await flushIce(memberId, peer);
-    const answer = await peer.createAnswer(); await peer.setLocalDescription(answer); await sendSignal(memberId, "answer", answer);
-  };
-  const connectToDirector = async (sourceId: string) => {
-    if (!id || sourceId === clientId) return;
-    const key = `receive:${sourceId}`; const current = peersRef.current.get(key); if (current && ["new", "connecting", "connected"].includes(current.connectionState)) return; current?.close();
-    const peer = new RTCPeerConnection(peerConfig); peersRef.current.set(key, peer); peer.addTransceiver("audio", { direction: "recvonly" });
-    peer.onicecandidate = event => { if (event.candidate) void sendSignal(sourceId, "ice", event.candidate.toJSON()); };
-    peer.ontrack = event => { let audio = directorAudioRef.current.get(sourceId); if (!audio) { audio = new Audio(); audio.autoplay = true; audio.setAttribute("playsinline", "true"); directorAudioRef.current.set(sourceId, audio); } audio.srcObject = event.streams[0]; audio.muted = false; audio.volume = 1; setIncomingAudio(true); void audio.play().then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true)); };
-    const offer = await peer.createOffer(); await peer.setLocalDescription(offer); await sendSignal(sourceId, "offer", offer);
-  };
-  useEffect(() => {
-    signalHandlerRef.current = signal => {
-      if (signal.clientId === clientId || signal.targetId !== clientId) return;
-      void (async () => {
-        if (director && signal.type === "offer") await createDirectorPeer(signal.clientId, signal.data as RTCSessionDescriptionInit);
-        else if (signal.type === "answer") { const key = `receive:${signal.clientId}`; const peer = peersRef.current.get(key); if (peer) { await peer.setRemoteDescription(signal.data as RTCSessionDescriptionInit); await flushIce(key, peer); } }
-        else if (signal.type === "ice") { const key = peersRef.current.has(signal.clientId) ? signal.clientId : `receive:${signal.clientId}`; const peer = peersRef.current.get(key); if (peer?.remoteDescription) await peer.addIceCandidate(signal.data as RTCIceCandidateInit); else pendingIceRef.current.set(key, [...(pendingIceRef.current.get(key) || []), signal.data as RTCIceCandidateInit]); }
-      })().catch(error => show(error instanceof Error ? error.message : "Koneksi audio gagal", "error"));
-    };
-  });
+  const microphoneReady = microphoneAccessError() === null;
   useEffect(() => { endpoints.cues().then(data => setCues((data || []).filter(cue => cue.active))).catch(() => setCues([])); }, []);
   useEffect(() => { let cancelled = false; Promise.resolve().then(() => { if (!cancelled) { setSongs(room?.songs || []); setCurrentSong(room?.currentSong || null); setCurrentSection(room?.currentSong?.sections.find(s => String(s.id) === String(room.currentSongSectionId)) || null); } }); return () => { cancelled = true; }; }, [room?.songs, room?.currentSong, room?.currentSongSectionId]);
   useEffect(() => {
-    if (!id) return; endpoints.directors(id).then(setActiveDirectors).catch(() => setActiveDirectors([]));
-    if (director) endpoints.enterDirectorPresence(id).then(result => setActiveDirectors(result.directors)).catch(error => show(error instanceof Error ? error.message : "Gagal mendaftarkan director", "error"));
+    if (!id) return;
+    if (director) endpoints.enterDirectorPresence(id).catch(error => show(error instanceof Error ? error.message : "Gagal mendaftarkan director", "error"));
   // Director registration follows room and authenticated identity.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, director, user?.id]);
   useEffect(() => {
     if (!id || user?.role !== "Member") return;
-    endpoints.enterMemberPresence(id).then(member => { setLoggedMember(member); setMembers(current => current.some(item => item.id === member.id) ? current.map(item => item.id === member.id ? member : item) : [...current, member]); }).catch(error => show(error instanceof Error ? error.message : "Gagal menghubungkan member", "error"));
+    endpoints.enterMemberPresence(id).then(member => { setMembers(current => current.some(item => item.id === member.id) ? current.map(item => item.id === member.id ? member : item) : [...current, member]); }).catch(error => show(error instanceof Error ? error.message : "Gagal menghubungkan member", "error"));
   // Presence is tied to the room/user identity and must only run when either changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, user?.id, user?.role]);
+  useEffect(() => {
+    if (!id || (!user && !guestMemberId)) return;
+    let cancelled = false;
+    const livekitRoom = new LiveKitRoom({ adaptiveStream: false, dynacast: false });
+    const audioElements = livekitAudioElementsRef.current;
+    livekitRoomRef.current?.disconnect();
+    livekitRoomRef.current = livekitRoom;
+
+    livekitRoom.on(RoomEvent.TrackSubscribed, track => {
+      if (track.kind !== Track.Kind.Audio) return;
+      const element = track.attach();
+      element.autoplay = true;
+      element.setAttribute("playsinline", "true");
+      element.style.display = "none";
+      document.body.appendChild(element);
+      audioElements.add(element);
+      setIncomingAudio(true);
+      void element.play().then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true));
+    });
+    livekitRoom.on(RoomEvent.TrackUnsubscribed, track => {
+      track.detach().forEach(element => {
+        audioElements.delete(element);
+        element.remove();
+      });
+      if (audioElements.size === 0) setIncomingAudio(false);
+    });
+    livekitRoom.on(RoomEvent.AudioPlaybackStatusChanged, () => setAudioBlocked(!livekitRoom.canPlaybackAudio));
+    livekitRoom.on(RoomEvent.ConnectionStateChanged, connectionState => {
+      setLivekitConnected(connectionState === ConnectionState.Connected);
+      if (connectionState === ConnectionState.Disconnected) setIncomingAudio(false);
+    });
+
+    void (async () => {
+      try {
+        const connection = user ? await endpoints.livekitToken(id) : await endpoints.guestLivekitToken(id, guestMemberId);
+        if (cancelled) return;
+        await livekitRoom.connect(connection.url, connection.token, { autoSubscribe: true });
+        if (cancelled) { livekitRoom.disconnect(); return; }
+        setLivekitConnected(true);
+        setAudioBlocked(!livekitRoom.canPlaybackAudio);
+      } catch (error) {
+        if (!cancelled) show(error instanceof Error ? error.message : "Gagal terhubung ke LiveKit", "error");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      livekitRoom.disconnect();
+      setLivekitConnected(false);
+      audioElements.forEach(element => element.remove());
+      audioElements.clear();
+      if (livekitRoomRef.current === livekitRoom) livekitRoomRef.current = null;
+    };
+  // LiveKit identity only changes when the application room or signed-in participant changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, user?.id, guestMemberId]);
   useEffect(() => {
     if (!id) return;
     const events = new EventSource(roomEventsUrl(id));
@@ -170,21 +172,16 @@ export function WorshipRoom() {
       hideTimer = window.setTimeout(() => setCueVisible(false), 5000);
       if (navigator.vibrate) navigator.vibrate([180, 80, 180]);
     });
-    events.addEventListener("signal", event => signalHandlerRef.current(JSON.parse((event as MessageEvent).data) as RoomSignal));
     events.addEventListener("presence", event => {
       const presence = JSON.parse((event as MessageEvent).data) as { action: "joined" | "left"; memberId?: number | string; member?: TeamMember };
       if (presence.action === "joined" && presence.member) setMembers(current => current.some(member => member.id === presence.member?.id) ? current : [...current, presence.member!]);
-      if (presence.action === "left" && presence.memberId != null) { const peerId = `member-${presence.memberId}`; stopPeerMonitoring(peerId); peersRef.current.get(peerId)?.close(); peersRef.current.delete(peerId); setMembers(current => current.filter(member => String(member.id) !== String(presence.memberId))); }
+      if (presence.action === "left" && presence.memberId != null) setMembers(current => current.filter(member => String(member.id) !== String(presence.memberId)));
     });
-    events.addEventListener("director", event => { const data = JSON.parse((event as MessageEvent).data) as { directors: { clientId: string; name: string; role: string }[] }; setActiveDirectors(data.directors || []); });
     events.addEventListener("speaker", event => { const data = JSON.parse((event as MessageEvent).data) as { clientId: string }; setActiveSpeaker(data.clientId || ""); });
     events.addEventListener("room-state", event => { const next = JSON.parse((event as MessageEvent).data) as WorshipRoomType; setSongs(next.songs || []); setCurrentSong(next.currentSong || null); setCurrentSection(next.currentSong?.sections.find(s => String(s.id) === String(next.currentSongSectionId)) || null); });
     events.onerror = () => { setRealtimeConnected(false); console.warn("Koneksi realtime cue terputus; browser akan mencoba tersambung kembali."); };
     return () => { setRealtimeConnected(false); window.clearTimeout(hideTimer); events.close(); };
   }, [id, setMembers, viewerRole]);
-  // Receiver negotiation intentionally reuses the latest signaling callback.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (!id) return; const connect = () => activeDirectors.forEach(item => { if (item.clientId !== clientId) void connectToDirector(item.clientId); }); const timeout = window.setTimeout(connect, 300); const retry = window.setInterval(connect, 5000); return () => { window.clearTimeout(timeout); window.clearInterval(retry); }; }, [id, clientId, activeDirectors]);
   useEffect(() => {
     localStorage.setItem("sahata-room-role", director ? "director" : "member");
   }, [director]);
@@ -196,7 +193,6 @@ export function WorshipRoom() {
     }
     return () => clearInterval(timer.current);
   }, [talking]);
-  useEffect(() => { micStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = talking; }); }, [talking]);
   const sendCue = async (label: string, songSection?: SongSection, targetOverride?: string) => {
     const message = `${label}${repeat > 1 && ["Bridge", "Chorus", "Repeat"].includes(label) ? ` ×${repeat}` : ""}`;
     if (!room) return;
@@ -210,12 +206,10 @@ export function WorshipRoom() {
     } catch (error) { show(error instanceof Error ? error.message : "Cue gagal dikirim", "error"); }
   };
   const leave = async () => {
-    micStreamRef.current?.getTracks().forEach(track => track.stop());
-    peersRef.current.forEach(peer => peer.close());
-    peersRef.current.clear();
-    peerStatsTimersRef.current.forEach(timer => window.clearInterval(timer)); peerStatsTimersRef.current.clear();
-    peerDisconnectTimersRef.current.forEach(timer => window.clearTimeout(timer)); peerDisconnectTimersRef.current.clear();
-    directorAudioRef.current.forEach(audio => { audio.pause(); audio.srcObject = null; }); directorAudioRef.current.clear();
+    livekitRoomRef.current?.disconnect();
+    livekitRoomRef.current = null;
+    livekitAudioElementsRef.current.forEach(element => element.remove());
+    livekitAudioElementsRef.current.clear();
     if (director && id) { if (talking) await endpoints.speakerLock(id, "release").catch(() => {}); await endpoints.leaveDirectorPresence(id).catch(() => {}); }
     if (!user) {
       if (id && joinedMember?.id) {
@@ -228,14 +222,14 @@ export function WorshipRoom() {
     } else if (user.role === "Member" && id) {
       try { await endpoints.leaveMemberPresence(id); }
       catch (error) { show(error instanceof Error ? error.message : "Gagal memperbarui status member", "error"); }
-      setLoggedMember(null);
     }
     show("You left the room", "warning");
     nav(user ? "/dashboard" : "/", { replace: true });
   };
   const enableIncomingAudio = () => {
-    const attempts = [...directorAudioRef.current.values()].map(audio => audio.play());
-    void Promise.allSettled(attempts).then(results => { const failed = results.some(result => result.status === "rejected"); setAudioBlocked(failed); show(failed ? "Browser masih memblokir audio" : "Audio enabled", failed ? "warning" : "success"); });
+    const livekitRoom = livekitRoomRef.current;
+    if (!livekitRoom) return;
+    void livekitRoom.startAudio().then(() => { setAudioBlocked(false); show("Audio enabled"); }).catch(() => { setAudioBlocked(true); show("Browser masih memblokir audio", "warning"); });
   };
   if (!room) {
     return (
@@ -303,7 +297,40 @@ export function WorshipRoom() {
             cues={cues}
             talking={talking}
             seconds={seconds}
-          onTalk={(value) => { void (async () => { if (!id) return; try { if (value) await ensureMicStream(); await endpoints.speakerLock(id, value ? "acquire" : "release"); micStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = value; }); if (!value) setSeconds(0); setTalking(value); } catch (error) { show(error instanceof Error ? error.message : "Director lain sedang berbicara", "warning"); } })(); }}
+            onTalk={(value) => {
+              void (async () => {
+                if (!id) return;
+                if (value) {
+                  const accessError = microphoneAccessError();
+                  if (accessError) {
+                    show(accessError, "warning");
+                    return;
+                  }
+                }
+                const livekitRoom = livekitRoomRef.current;
+                if (!livekitRoom || livekitRoom.state !== ConnectionState.Connected) {
+                  show("LiveKit belum terhubung. Tunggu sebentar lalu coba lagi.", "warning");
+                  return;
+                }
+
+                let lockAcquired = false;
+                try {
+                  await endpoints.speakerLock(id, value ? "acquire" : "release");
+                  lockAcquired = value;
+                  await livekitRoom.localParticipant.setMicrophoneEnabled(value, {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                  });
+                  if (!value) setSeconds(0);
+                  setTalking(value);
+                } catch (error) {
+                  if (lockAcquired) await endpoints.speakerLock(id, "release").catch(() => {});
+                  setTalking(false);
+                  show(microphonePublishError(error), "warning");
+                }
+              })();
+            }}
             channel={channel}
             setChannel={setChannel}
             activeCue={activeCue}
@@ -312,6 +339,8 @@ export function WorshipRoom() {
             repeat={repeat}
             setRepeat={setRepeat}
             activeSpeaker={activeSpeaker}
+            microphoneReady={microphoneReady}
+            livekitConnected={livekitConnected}
             songs={songs}
             currentSong={currentSong}
             currentSection={currentSection}
@@ -370,6 +399,8 @@ type DirectorProps = {
   repeat: number;
   setRepeat: (v: number) => void;
   activeSpeaker: string;
+  microphoneReady: boolean;
+  livekitConnected: boolean;
   songs: Song[];
   currentSong: Song | null;
   currentSection: SongSection | null;
@@ -402,14 +433,14 @@ function DirectorView(p: DirectorProps) {
               </div>
               <div className="mt-5 grid grid-cols-2 gap-2 text-xs muted">
                 {[
-                  "Microphone ready",
-                  "Headset connected",
-                  "Noise suppression on",
-                  "Low latency mode",
-                ].map((x) => (
-                  <span key={x} className="flex items-center gap-1.5">
-                    <Check size={14} className="text-emerald-500" />
-                    {x}
+                  { label: p.microphoneReady ? "Microphone ready" : "HTTPS required for microphone", ready: p.microphoneReady },
+                  { label: p.livekitConnected ? "LiveKit connected" : "LiveKit connecting", ready: p.livekitConnected },
+                  { label: "Noise suppression on", ready: p.microphoneReady },
+                  { label: "Low latency mode", ready: true },
+                ].map((item) => (
+                  <span key={item.label} className={`flex items-center gap-1.5 ${item.ready ? "" : "text-amber-500"}`}>
+                    <Check size={14} className={item.ready ? "text-emerald-500" : "text-amber-500"} />
+                    {item.label}
                   </span>
                 ))}
               </div>
