@@ -355,11 +355,11 @@ export function WorshipRoom() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <StatusBadge status="Live" />
-            <span className="flex items-center gap-1 text-sm muted">
+            {user && <span className="flex items-center gap-1 text-sm muted">
               <Users size={16} />
               {state.members.filter((m) => m.status !== "disconnected").length}/
               {state.members.length} connected
-            </span>
+            </span>}
           </div>
           {user && user.role !== "Member" && <label className="flex items-center gap-2 rounded-xl border bg-white px-3 py-2 text-sm dark:bg-panel">
             <span className="muted">Demo view</span>

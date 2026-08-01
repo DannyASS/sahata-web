@@ -150,10 +150,6 @@ export function JoinRoom() {
               "Guitarist",
               "Bassist",
               "Drummer",
-              "Sound Engineer",
-              "Multimedia",
-              "Lighting",
-              "Stage Manager",
             ].map(value => ({ value }))} />
         </label>
         <label><span className="label">Channel</span><ModernSelect name="channel" options={["All Team", "Band", "Vocal", "Production", "Multimedia", "Sound"].map(value => ({ value }))} /></label>
