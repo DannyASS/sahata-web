@@ -33,6 +33,8 @@ import { useAuth, useRoom, useToast } from "../contexts/AppContexts";
 import { endpoints, roomEventsUrl } from "../lib/api";
 import type { ActivityLog, Cue, Song, SongSection, TeamMember, WorshipRoom as WorshipRoomType } from "../types";
 const serviceRoles = ["Worship Leader", "Singer", "Keyboardist", "Guitarist", "Bassist", "Drummer", "Sound Engineer", "Multimedia", "Lighting", "Stage Manager", "Member"];
+type LiveKitStatus = "connecting" | "connected" | "reconnecting" | "disconnected" | "failed";
+const liveKitRetryDelays = [0, 1_000, 2_000, 4_000, 8_000];
 function microphoneAccessError(): string | null {
   if (!window.isSecureContext) {
     return "Microphone hanya dapat digunakan melalui HTTPS atau localhost. Buka web dengan https:// lalu coba lagi.";
@@ -63,7 +65,9 @@ export function WorshipRoom() {
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [currentSection, setCurrentSection] = useState<SongSection | null>(null);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
-  const [livekitConnected, setLivekitConnected] = useState(false);
+  const [livekitStatus, setLivekitStatus] = useState<LiveKitStatus>("connecting");
+  const [livekitAttempt, setLivekitAttempt] = useState(1);
+  const [livekitReconnectKey, setLivekitReconnectKey] = useState(0);
   const [activeSpeaker, setActiveSpeaker] = useState("");
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [incomingAudio, setIncomingAudio] = useState(false);
@@ -102,59 +106,129 @@ export function WorshipRoom() {
   useEffect(() => {
     if (!id || (!user && !guestMemberId)) return;
     let cancelled = false;
-    const livekitRoom = new LiveKitRoom({ adaptiveStream: false, dynacast: false });
     const audioElements = livekitAudioElementsRef.current;
-    livekitRoomRef.current?.disconnect();
-    livekitRoomRef.current = livekitRoom;
+    let connectedOnce = false;
+    let reconnectTimer: number | undefined;
+    let activeTokenController: AbortController | undefined;
+    let activeTokenTimeout: number | undefined;
 
-    livekitRoom.on(RoomEvent.TrackSubscribed, track => {
-      if (track.kind !== Track.Kind.Audio) return;
-      const element = track.attach();
-      element.autoplay = true;
-      element.setAttribute("playsinline", "true");
-      element.style.display = "none";
-      document.body.appendChild(element);
-      audioElements.add(element);
-      setIncomingAudio(true);
-      void element.play().then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true));
-    });
-    livekitRoom.on(RoomEvent.TrackUnsubscribed, track => {
-      track.detach().forEach(element => {
-        audioElements.delete(element);
-        element.remove();
+    const clearAudioElements = () => {
+      audioElements.forEach(element => element.remove());
+      audioElements.clear();
+      setIncomingAudio(false);
+    };
+
+    const wait = (delay: number) => new Promise<void>(resolve => window.setTimeout(resolve, delay));
+
+    const configureRoom = (livekitRoom: LiveKitRoom) => {
+      const isCurrentRoom = () => !cancelled && livekitRoomRef.current === livekitRoom;
+      livekitRoom.on(RoomEvent.TrackSubscribed, track => {
+        if (!isCurrentRoom() || track.kind !== Track.Kind.Audio) return;
+        const element = track.attach();
+        element.autoplay = true;
+        element.setAttribute("playsinline", "true");
+        element.style.display = "none";
+        document.body.appendChild(element);
+        audioElements.add(element);
+        setIncomingAudio(true);
+        void element.play().then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true));
       });
-      if (audioElements.size === 0) setIncomingAudio(false);
-    });
-    livekitRoom.on(RoomEvent.AudioPlaybackStatusChanged, () => setAudioBlocked(!livekitRoom.canPlaybackAudio));
-    livekitRoom.on(RoomEvent.ConnectionStateChanged, connectionState => {
-      setLivekitConnected(connectionState === ConnectionState.Connected);
-      if (connectionState === ConnectionState.Disconnected) setIncomingAudio(false);
-    });
+      livekitRoom.on(RoomEvent.TrackUnsubscribed, track => {
+        if (!isCurrentRoom()) return;
+        track.detach().forEach(element => {
+          audioElements.delete(element);
+          element.remove();
+        });
+        if (audioElements.size === 0) setIncomingAudio(false);
+      });
+      livekitRoom.on(RoomEvent.AudioPlaybackStatusChanged, () => { if (isCurrentRoom()) setAudioBlocked(!livekitRoom.canPlaybackAudio); });
+      livekitRoom.on(RoomEvent.Reconnecting, () => { if (isCurrentRoom()) setLivekitStatus("reconnecting"); });
+      livekitRoom.on(RoomEvent.SignalReconnecting, () => { if (isCurrentRoom()) setLivekitStatus("reconnecting"); });
+      livekitRoom.on(RoomEvent.Reconnected, () => {
+        if (!isCurrentRoom()) return;
+        setLivekitStatus("connected");
+        setAudioBlocked(!livekitRoom.canPlaybackAudio);
+      });
+      livekitRoom.on(RoomEvent.Disconnected, () => {
+        if (!isCurrentRoom()) return;
+        setLivekitStatus("disconnected");
+        clearAudioElements();
+        if (connectedOnce) {
+          window.clearTimeout(reconnectTimer);
+          reconnectTimer = window.setTimeout(() => setLivekitReconnectKey(key => key + 1), 1_000);
+        }
+      });
+      livekitRoom.on(RoomEvent.ConnectionStateChanged, connectionState => {
+        if (!isCurrentRoom()) return;
+        if (connectionState === ConnectionState.Connected) setLivekitStatus("connected");
+        if (connectionState === ConnectionState.Reconnecting || connectionState === ConnectionState.SignalReconnecting) setLivekitStatus("reconnecting");
+      });
+    };
 
     void (async () => {
-      try {
-        const connection = user ? await endpoints.livekitToken(id) : await endpoints.guestLivekitToken(id, guestMemberId);
+      let lastError: unknown;
+      for (let attempt = 0; attempt < liveKitRetryDelays.length && !cancelled; attempt += 1) {
+        if (liveKitRetryDelays[attempt] > 0) await wait(liveKitRetryDelays[attempt]);
         if (cancelled) return;
-        await livekitRoom.connect(connection.url, connection.token, { autoSubscribe: true });
-        if (cancelled) { livekitRoom.disconnect(); return; }
-        setLivekitConnected(true);
-        setAudioBlocked(!livekitRoom.canPlaybackAudio);
-      } catch (error) {
-        if (!cancelled) show(error instanceof Error ? error.message : "Gagal terhubung ke LiveKit", "error");
+
+        setLivekitAttempt(attempt + 1);
+        setLivekitStatus("connecting");
+        setAudioBlocked(false);
+        clearAudioElements();
+
+        activeTokenController = new AbortController();
+        activeTokenTimeout = window.setTimeout(() => activeTokenController?.abort(), 10_000);
+        const livekitRoom = new LiveKitRoom({ adaptiveStream: false, dynacast: false });
+        livekitRoomRef.current?.disconnect();
+        livekitRoomRef.current = livekitRoom;
+        configureRoom(livekitRoom);
+
+        try {
+          const connection = user
+            ? await endpoints.livekitToken(id, activeTokenController.signal)
+            : await endpoints.guestLivekitToken(id, guestMemberId, activeTokenController.signal);
+          window.clearTimeout(activeTokenTimeout);
+          activeTokenController = undefined;
+          activeTokenTimeout = undefined;
+          if (cancelled) { livekitRoom.disconnect(); return; }
+          await livekitRoom.connect(connection.url, connection.token, {
+            autoSubscribe: true,
+            maxRetries: 0,
+            websocketTimeout: 10_000,
+          });
+          if (cancelled) { livekitRoom.disconnect(); return; }
+          connectedOnce = true;
+          setLivekitStatus("connected");
+          setAudioBlocked(!livekitRoom.canPlaybackAudio);
+          return;
+        } catch (error) {
+          window.clearTimeout(activeTokenTimeout);
+          activeTokenController = undefined;
+          activeTokenTimeout = undefined;
+          lastError = error;
+          livekitRoom.disconnect();
+          if (livekitRoomRef.current === livekitRoom) livekitRoomRef.current = null;
+        }
+      }
+
+      if (!cancelled) {
+        setLivekitStatus("failed");
+        show(lastError instanceof Error && lastError.name !== "AbortError" ? lastError.message : "Koneksi audio LiveKit gagal. Tekan Reconnect Audio untuk mencoba lagi.", "error");
       }
     })();
 
     return () => {
       cancelled = true;
-      livekitRoom.disconnect();
-      setLivekitConnected(false);
-      audioElements.forEach(element => element.remove());
-      audioElements.clear();
-      if (livekitRoomRef.current === livekitRoom) livekitRoomRef.current = null;
+      window.clearTimeout(reconnectTimer);
+      window.clearTimeout(activeTokenTimeout);
+      activeTokenController?.abort();
+      livekitRoomRef.current?.disconnect();
+      livekitRoomRef.current = null;
+      clearAudioElements();
     };
   // LiveKit identity only changes when the application room or signed-in participant changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, user?.id, guestMemberId]);
+  }, [id, user?.id, guestMemberId, livekitReconnectKey]);
   useEffect(() => {
     if (!id) return;
     const events = new EventSource(roomEventsUrl(id));
@@ -231,6 +305,7 @@ export function WorshipRoom() {
     if (!livekitRoom) return;
     void livekitRoom.startAudio().then(() => { setAudioBlocked(false); show("Audio enabled"); }).catch(() => { setAudioBlocked(true); show("Browser masih memblokir audio", "warning"); });
   };
+  const reconnectLiveKit = () => setLivekitReconnectKey(key => key + 1);
   if (!room) {
     return (
       <div className="grid min-h-screen place-items-center bg-slate-50 p-6 dark:bg-ink">
@@ -276,7 +351,7 @@ export function WorshipRoom() {
         </div>
       </header>
       <main className="mx-auto max-w-[1500px] px-3 py-4 pb-28 sm:px-5 md:pb-8">
-        {(audioBlocked || incomingAudio) && <div className="mb-4 flex items-center justify-between rounded-xl border border-brand-500/40 bg-brand-500/10 p-3"><span className="text-sm font-medium">{incomingAudio ? "Director audio ready" : "Waiting for director audio"}</span><button type="button" className="btn-primary !min-h-9 text-sm" onClick={enableIncomingAudio}><Headphones size={16} /> Enable Audio</button></div>}
+        {(livekitStatus !== "connected" || audioBlocked || incomingAudio) && <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-500/40 bg-brand-500/10 p-3" aria-live="polite"><span className="text-sm font-medium">{livekitStatus === "connecting" ? `Connecting LiveKit${livekitAttempt > 1 ? ` (attempt ${livekitAttempt}/${liveKitRetryDelays.length})` : ""}...` : livekitStatus === "reconnecting" ? "LiveKit reconnecting..." : livekitStatus === "failed" ? "Audio connection failed" : livekitStatus === "disconnected" ? "Audio disconnected" : incomingAudio ? "Director audio ready" : "LiveKit connected"}</span><div className="flex gap-2">{livekitStatus === "connected" && audioBlocked && <button type="button" className="btn-primary !min-h-9 text-sm" onClick={enableIncomingAudio}><Headphones size={16} /> Enable Audio</button>}{(livekitStatus === "failed" || livekitStatus === "disconnected") && <button type="button" className="btn-primary !min-h-9 text-sm" onClick={reconnectLiveKit}><RefreshCw size={16} /> Reconnect Audio</button>}</div></div>}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <StatusBadge status="Live" />
@@ -340,7 +415,7 @@ export function WorshipRoom() {
             setRepeat={setRepeat}
             activeSpeaker={activeSpeaker}
             microphoneReady={microphoneReady}
-            livekitConnected={livekitConnected}
+            livekitConnected={livekitStatus === "connected"}
             songs={songs}
             currentSong={currentSong}
             currentSection={currentSection}
