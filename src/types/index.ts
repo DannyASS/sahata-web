@@ -63,6 +63,7 @@ export interface Song {
   defaultKey: string;
   selectedKey?: string;
   bpm: number;
+  chordSheet: string;
   sections: SongSection[];
 }
 export interface ActivityLog {
