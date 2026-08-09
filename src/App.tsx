@@ -13,35 +13,111 @@ import { MasterUsers, RoleManagement } from "./pages/AdminPages";
 import { Songs } from "./pages/Songs";
 function ProtectedApp() {
   const { user } = useAuth();
-  return user && localStorage.getItem("sahata-token") ? <AppLayout /> : <Navigate to="/login" replace />;
+  return user && localStorage.getItem("sahata-token") ? (
+    <AppLayout />
+  ) : (
+    <Navigate to="/login" replace />
+  );
+}
+function LoggedOutOnly({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  return user && localStorage.getItem("sahata-token") ? (
+    <Navigate to="/dashboard" replace />
+  ) : (
+    children
+  );
 }
 function AdminOnly({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
-  return user?.role === "Admin Gereja" ? children : <Navigate to="/dashboard" replace />;
+  return user?.role === "Admin Gereja" ? (
+    children
+  ) : (
+    <Navigate to="/dashboard" replace />
+  );
 }
 function DirectorOnly({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
-  return user?.role !== "Member" ? children : <Navigate to="/dashboard" replace />;
+  return user?.role !== "Member" ? (
+    children
+  ) : (
+    <Navigate to="/dashboard" replace />
+  );
 }
 export default function App() {
   return (
     <Providers>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+          <Route
+            path="/"
+            element={
+              <LoggedOutOnly>
+                <Landing />
+              </LoggedOutOnly>
+            }
+          />
+          <Route
+            path="/login"
+            element={
+              <LoggedOutOnly>
+                <Login />
+              </LoggedOutOnly>
+            }
+          />
+          <Route
+            path="/register"
+            element={
+              <LoggedOutOnly>
+                <Register />
+              </LoggedOutOnly>
+            }
+          />
           <Route path="/join" element={<JoinRoom />} />
           <Route path="/room/:id" element={<WorshipRoom />} />
           <Route element={<ProtectedApp />}>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/rooms" element={<Rooms />} />
-            <Route path="/team" element={<DirectorOnly><Team /></DirectorOnly>} />
-            <Route path="/cues" element={<DirectorOnly><Cues /></DirectorOnly>} />
-            <Route path="/songs" element={<DirectorOnly><Songs /></DirectorOnly>} />
+            <Route
+              path="/team"
+              element={
+                <DirectorOnly>
+                  <Team />
+                </DirectorOnly>
+              }
+            />
+            <Route
+              path="/cues"
+              element={
+                <DirectorOnly>
+                  <Cues />
+                </DirectorOnly>
+              }
+            />
+            <Route
+              path="/songs"
+              element={
+                <DirectorOnly>
+                  <Songs />
+                </DirectorOnly>
+              }
+            />
             <Route path="/settings" element={<Settings />} />
-            <Route path="/master-users" element={<AdminOnly><MasterUsers /></AdminOnly>} />
-            <Route path="/role-management" element={<AdminOnly><RoleManagement /></AdminOnly>} />
+            <Route
+              path="/master-users"
+              element={
+                <AdminOnly>
+                  <MasterUsers />
+                </AdminOnly>
+              }
+            />
+            <Route
+              path="/role-management"
+              element={
+                <AdminOnly>
+                  <RoleManagement />
+                </AdminOnly>
+              }
+            />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
