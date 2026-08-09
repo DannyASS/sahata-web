@@ -438,6 +438,36 @@ export function WorshipRoom() {
         ) || null,
       );
     });
+    events.addEventListener("song-updated", (event) => {
+      const updatedSong = JSON.parse((event as MessageEvent).data) as Song;
+      setSongs((current) =>
+        current.map((song) =>
+          String(song.id) === String(updatedSong.id)
+            ? {
+                ...updatedSong,
+                selectedKey: song.selectedKey || updatedSong.defaultKey,
+              }
+            : song,
+        ),
+      );
+      setCurrentSong((current) =>
+        current && String(current.id) === String(updatedSong.id)
+          ? {
+              ...updatedSong,
+              selectedKey: current.selectedKey || updatedSong.defaultKey,
+            }
+          : current,
+      );
+      setCurrentSection((current) =>
+        current && String(current.songId) === String(updatedSong.id)
+          ? updatedSong.sections.find(
+              (section) => String(section.id) === String(current.id),
+            ) ||
+            updatedSong.sections[0] ||
+            null
+          : current,
+      );
+    });
     events.onerror = () => {
       setRealtimeConnected(false);
       console.warn(
