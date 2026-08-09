@@ -1178,6 +1178,9 @@ function MemberView({
   const [volume, setVolume] = useState(72);
   const [lyricSize, setLyricSize] = useState(32);
   const [musicianTab, setMusicianTab] = useState<"cue" | "chords">("cue");
+  const [worshipLeaderLyricMode, setWorshipLeaderLyricMode] = useState<
+    "follow-director" | "full-song"
+  >("follow-director");
   const [selectedGuestSongId, setSelectedGuestSongId] =
     useState("follow-director");
   const [chordTranspose, setChordTranspose] = useState({
@@ -1188,27 +1191,44 @@ function MemberView({
   const effectiveRole =
     allowViewSwitch && viewMode === "Singers" ? "Singer" : role;
   const normalizedRole = effectiveRole.trim().toLowerCase();
+  const isWorshipLeader =
+    normalizedRole === "worship leader" || normalizedRole === "wl";
+  const isGuestWorshipLeader = guest && isWorshipLeader;
+  const showFullWorshipLeaderLyrics =
+    isGuestWorshipLeader && worshipLeaderLyricMode === "full-song";
   const selectedGuestSongExists =
     selectedGuestSongId === "follow-director" ||
     songs.some((song) => String(song.id) === selectedGuestSongId);
   const guestSongSelectValue = selectedGuestSongExists
     ? selectedGuestSongId
     : "follow-director";
+  const worshipLeaderSongSelectValue = songs.some(
+    (song) => String(song.id) === selectedGuestSongId,
+  )
+    ? selectedGuestSongId
+    : songs[0]
+      ? String(songs[0].id)
+      : "no-songs";
   const selectedSong =
-    guestSongSelectValue === "follow-director"
-      ? currentSong || songs[0] || null
-      : songs.find((song) => String(song.id) === guestSongSelectValue) ||
-        currentSong ||
-        songs[0] ||
-        null;
+    isGuestWorshipLeader && worshipLeaderLyricMode === "follow-director"
+      ? currentSong
+      : showFullWorshipLeaderLyrics
+        ? songs.find(
+            (song) => String(song.id) === worshipLeaderSongSelectValue,
+          ) || null
+        : guestSongSelectValue === "follow-director"
+          ? currentSong || songs[0] || null
+          : songs.find((song) => String(song.id) === guestSongSelectValue) ||
+            currentSong ||
+            songs[0] ||
+            null;
   const selectedSection =
-    selectedSong && String(selectedSong.id) === String(currentSong?.id)
-      ? currentSection || selectedSong.sections?.[0] || null
-      : selectedSong?.sections?.[0] || null;
-  const isLyricsViewer =
-    normalizedRole.includes("singer") ||
-    normalizedRole === "worship leader" ||
-    normalizedRole === "wl";
+    isGuestWorshipLeader && worshipLeaderLyricMode === "follow-director"
+      ? currentSection
+      : selectedSong && String(selectedSong.id) === String(currentSong?.id)
+        ? currentSection || selectedSong.sections?.[0] || null
+        : selectedSong?.sections?.[0] || null;
+  const isLyricsViewer = normalizedRole.includes("singer") || isWorshipLeader;
   const isMusician = [
     "keyboardist",
     "guitarist",
@@ -1261,33 +1281,80 @@ function MemberView({
           </div>
         ))}
       </div>
-      {guest && (
-        <div className="surface p-4">
-          <label>
-            <span className="label">Song for this view</span>
-            <ModernSelect
-              ariaLabel="Select song for guest view"
-              options={[
-                {
-                  value: "follow-director",
-                  label: currentSong
-                    ? `Follow Music Director — ${currentSong.title}`
-                    : "Follow Music Director — first song",
-                },
-                ...songs.map((song) => ({
-                  value: String(song.id),
-                  label: song.title,
-                })),
-              ]}
-              value={guestSongSelectValue}
-              onValueChange={setSelectedGuestSongId}
-            />
-          </label>
-          <p className="mt-2 text-xs muted">
-            Only changes the song shown on this device.
-          </p>
+      {isGuestWorshipLeader && (
+        <div
+          className="surface grid grid-cols-2 gap-2 p-2"
+          role="tablist"
+          aria-label="Worship Leader lyrics mode"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={worshipLeaderLyricMode === "follow-director"}
+            className={`btn min-h-11 ${worshipLeaderLyricMode === "follow-director" ? "bg-brand-500 text-slate-950" : "hover:bg-slate-100 dark:hover:bg-slate-900"}`}
+            onClick={() => setWorshipLeaderLyricMode("follow-director")}
+          >
+            Follow MD
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={worshipLeaderLyricMode === "full-song"}
+            className={`btn min-h-11 ${worshipLeaderLyricMode === "full-song" ? "bg-brand-500 text-slate-950" : "hover:bg-slate-100 dark:hover:bg-slate-900"}`}
+            onClick={() => setWorshipLeaderLyricMode("full-song")}
+          >
+            Choose Song
+          </button>
         </div>
       )}
+      {guest &&
+        (!isGuestWorshipLeader || worshipLeaderLyricMode === "full-song") && (
+          <div className="surface p-4">
+            <label>
+              <span className="label">
+                {isGuestWorshipLeader
+                  ? "Song for full lyrics"
+                  : "Song for this view"}
+              </span>
+              <ModernSelect
+                ariaLabel="Select song for guest view"
+                options={
+                  isGuestWorshipLeader
+                    ? songs.length
+                      ? songs.map((song) => ({
+                          value: String(song.id),
+                          label: song.title,
+                        }))
+                      : [{ value: "no-songs", label: "No songs in this room" }]
+                    : [
+                        {
+                          value: "follow-director",
+                          label: currentSong
+                            ? `Follow Music Director — ${currentSong.title}`
+                            : "Follow Music Director — first song",
+                        },
+                        ...songs.map((song) => ({
+                          value: String(song.id),
+                          label: song.title,
+                        })),
+                      ]
+                }
+                value={
+                  isGuestWorshipLeader
+                    ? worshipLeaderSongSelectValue
+                    : guestSongSelectValue
+                }
+                onValueChange={setSelectedGuestSongId}
+                disabled={isGuestWorshipLeader && !songs.length}
+              />
+            </label>
+            <p className="mt-2 text-xs muted">
+              {isGuestWorshipLeader
+                ? "Shows every lyrics section on this device only."
+                : "Only changes the song shown on this device."}
+            </p>
+          </div>
+        )}
       {showGuestChordTab && (
         <div
           className="surface grid grid-cols-2 gap-2 p-2"
@@ -1339,7 +1406,7 @@ function MemberView({
           </div>
         </div>
       )}
-      {isLyricsViewer && cueVisible && (
+      {isLyricsViewer && cueVisible && !showFullWorshipLeaderLyrics && (
         <div className="surface border-brand-500 bg-brand-500/5 px-5 py-4 text-center shadow-glow">
           <p className="text-xs font-semibold text-brand-500">
             ACTIVE CUE • {channel}
@@ -1352,7 +1419,9 @@ function MemberView({
           <div className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-brand-500">
-                Realtime Lyrics
+                {showFullWorshipLeaderLyrics
+                  ? "Full Song Lyrics"
+                  : "Realtime Lyrics"}
               </p>
               <h2 className="mt-1 text-xl font-bold">
                 {selectedSong?.title || "No song in this room"}
@@ -1381,18 +1450,40 @@ function MemberView({
               </button>
             </div>
           </div>
-          <div className="min-h-[320px] p-6 text-center sm:p-10">
-            <p className="mb-5 text-sm font-bold uppercase tracking-[.2em] text-brand-500">
-              {selectedSection?.sectionLabel || "Standby"}
-            </p>
-            <div
-              className="whitespace-pre-line font-semibold leading-relaxed"
-              style={{ fontSize: lyricSize }}
-            >
-              {selectedSection?.lyrics ||
-                "Lyrics are not available for this song."}
+          {showFullWorshipLeaderLyrics ? (
+            <div className="min-h-[320px] space-y-10 p-6 text-center sm:p-10">
+              {selectedSong?.sections.length ? (
+                selectedSong.sections.map((section) => (
+                  <section key={section.id}>
+                    <h3 className="mb-4 text-sm font-bold uppercase tracking-[.2em] text-brand-500">
+                      {section.sectionLabel}
+                    </h3>
+                    <div
+                      className="whitespace-pre-line font-semibold leading-relaxed"
+                      style={{ fontSize: lyricSize }}
+                    >
+                      {section.lyrics || "Lyrics are not available."}
+                    </div>
+                  </section>
+                ))
+              ) : (
+                <p className="muted">Lyrics are not available for this song.</p>
+              )}
             </div>
-          </div>
+          ) : (
+            <div className="min-h-[320px] p-6 text-center sm:p-10">
+              <p className="mb-5 text-sm font-bold uppercase tracking-[.2em] text-brand-500">
+                {selectedSection?.sectionLabel || "Standby"}
+              </p>
+              <div
+                className="whitespace-pre-line font-semibold leading-relaxed"
+                style={{ fontSize: lyricSize }}
+              >
+                {selectedSection?.lyrics ||
+                  "Lyrics will appear when the MD sends a song section cue."}
+              </div>
+            </div>
+          )}
         </div>
       )}
       {showGuestChordTab && musicianTab === "chords" && (
