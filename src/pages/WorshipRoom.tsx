@@ -54,7 +54,14 @@ const serviceRoles = [
   "Stage Manager",
   "Member",
 ];
-const guestChordRoles = ["keyboard", "keyboardist", "guitar", "guitarist", "bass", "bassist"];
+const guestChordRoles = [
+  "keyboard",
+  "keyboardist",
+  "guitar",
+  "guitarist",
+  "bass",
+  "bassist",
+];
 type LiveKitStatus =
   "connecting" | "connected" | "reconnecting" | "disconnected" | "failed";
 const liveKitRetryDelays = [0, 1_000, 2_000, 4_000, 8_000];
@@ -767,6 +774,7 @@ export function WorshipRoom() {
             role={joinedMember?.role || "Member"}
             channel={joinedMember?.channel || "All Team"}
             guest={!user || user.role === "Member"}
+            songs={songs}
             currentSong={currentSong}
             currentSection={currentSection}
             realtimeConnected={realtimeConnected}
@@ -1113,6 +1121,7 @@ function MemberView({
   guest,
   onLeave,
   onResponse,
+  songs,
   currentSong,
   currentSection,
   realtimeConnected,
@@ -1128,6 +1137,7 @@ function MemberView({
   guest: boolean;
   onLeave: () => void;
   onResponse: (s: string) => void;
+  songs: Song[];
   currentSong: Song | null;
   currentSection: SongSection | null;
   realtimeConnected: boolean;
@@ -1138,6 +1148,8 @@ function MemberView({
   const [volume, setVolume] = useState(72);
   const [lyricSize, setLyricSize] = useState(32);
   const [musicianTab, setMusicianTab] = useState<"cue" | "chords">("cue");
+  const [selectedGuestSongId, setSelectedGuestSongId] =
+    useState("follow-director");
   const [chordTranspose, setChordTranspose] = useState({
     songId: "",
     steps: 0,
@@ -1146,6 +1158,23 @@ function MemberView({
   const effectiveRole =
     allowViewSwitch && viewMode === "Singers" ? "Singer" : role;
   const normalizedRole = effectiveRole.trim().toLowerCase();
+  const selectedGuestSongExists =
+    selectedGuestSongId === "follow-director" ||
+    songs.some((song) => String(song.id) === selectedGuestSongId);
+  const guestSongSelectValue = selectedGuestSongExists
+    ? selectedGuestSongId
+    : "follow-director";
+  const selectedSong =
+    guestSongSelectValue === "follow-director"
+      ? currentSong || songs[0] || null
+      : songs.find((song) => String(song.id) === guestSongSelectValue) ||
+        currentSong ||
+        songs[0] ||
+        null;
+  const selectedSection =
+    selectedSong && String(selectedSong.id) === String(currentSong?.id)
+      ? currentSection || selectedSong.sections?.[0] || null
+      : selectedSong?.sections?.[0] || null;
   const isLyricsViewer =
     normalizedRole.includes("singer") ||
     normalizedRole === "worship leader" ||
@@ -1159,12 +1188,12 @@ function MemberView({
   const showGuestChordTab =
     guest &&
     guestChordRoles.includes(normalizedRole) &&
-    Boolean(currentSong?.chordSheet?.trim());
+    Boolean(selectedSong?.chordSheet?.trim());
   const localTransposeSteps =
-    chordTranspose.songId === currentSong?.id ? chordTranspose.steps : 0;
-  const roomKey = currentSong?.selectedKey || currentSong?.defaultKey || "C";
-  const chordSteps = currentSong
-    ? transposeSteps(currentSong.defaultKey, roomKey) + localTransposeSteps
+    chordTranspose.songId === selectedSong?.id ? chordTranspose.steps : 0;
+  const roomKey = selectedSong?.selectedKey || selectedSong?.defaultKey || "C";
+  const chordSteps = selectedSong
+    ? transposeSteps(selectedSong.defaultKey, roomKey) + localTransposeSteps
     : 0;
   const displayedChordKey = transposeKey(
     roomKey,
@@ -1202,6 +1231,33 @@ function MemberView({
           </div>
         ))}
       </div>
+      {guest && (
+        <div className="surface p-4">
+          <label>
+            <span className="label">Song for this view</span>
+            <ModernSelect
+              ariaLabel="Select song for guest view"
+              options={[
+                {
+                  value: "follow-director",
+                  label: currentSong
+                    ? `Follow Music Director — ${currentSong.title}`
+                    : "Follow Music Director — first song",
+                },
+                ...songs.map((song) => ({
+                  value: String(song.id),
+                  label: song.title,
+                })),
+              ]}
+              value={guestSongSelectValue}
+              onValueChange={setSelectedGuestSongId}
+            />
+          </label>
+          <p className="mt-2 text-xs muted">
+            Only changes the song shown on this device.
+          </p>
+        </div>
+      )}
       {showGuestChordTab && (
         <div
           className="surface grid grid-cols-2 gap-2 p-2"
@@ -1235,10 +1291,10 @@ function MemberView({
               Current Song
             </p>
             <h2 className="mt-1 text-xl font-bold">
-              {currentSong?.title || "Waiting for song"}
+              {selectedSong?.title || "No song in this room"}
             </h2>
             <p className="text-sm muted">
-              {currentSong?.artist || "The MD will select the current song"}
+              {selectedSong?.artist || "Add a song to the room setlist first"}
             </p>
           </div>
           <div className="min-w-20 rounded-xl bg-brand-500/10 p-3 text-center">
@@ -1246,8 +1302,8 @@ function MemberView({
               Key
             </span>
             <b className="text-2xl">
-              {currentSong
-                ? currentSong.selectedKey || currentSong.defaultKey
+              {selectedSong
+                ? selectedSong.selectedKey || selectedSong.defaultKey
                 : "—"}
             </b>
           </div>
@@ -1269,10 +1325,10 @@ function MemberView({
                 Realtime Lyrics
               </p>
               <h2 className="mt-1 text-xl font-bold">
-                {currentSong?.title || "Waiting for song"}
+                {selectedSong?.title || "No song in this room"}
               </h2>
               <p className="text-sm muted">
-                {currentSong?.artist || "The MD will select the current song"}
+                {selectedSong?.artist || "Add a song to the room setlist first"}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1297,14 +1353,14 @@ function MemberView({
           </div>
           <div className="min-h-[320px] p-6 text-center sm:p-10">
             <p className="mb-5 text-sm font-bold uppercase tracking-[.2em] text-brand-500">
-              {currentSection?.sectionLabel || "Standby"}
+              {selectedSection?.sectionLabel || "Standby"}
             </p>
             <div
               className="whitespace-pre-line font-semibold leading-relaxed"
               style={{ fontSize: lyricSize }}
             >
-              {currentSection?.lyrics ||
-                "Lyrics will appear when the MD sends a song section cue."}
+              {selectedSection?.lyrics ||
+                "Lyrics are not available for this song."}
             </div>
           </div>
         </div>
@@ -1316,7 +1372,7 @@ function MemberView({
               <p className="text-xs font-semibold uppercase tracking-wider text-brand-500">
                 Chord Sheet
               </p>
-              <h2 className="font-bold">{currentSong?.title}</h2>
+              <h2 className="font-bold">{selectedSong?.title}</h2>
             </div>
             <div
               className="flex items-center gap-2"
@@ -1328,7 +1384,7 @@ function MemberView({
                 aria-label="Transpose down one semitone"
                 onClick={() =>
                   setChordTranspose({
-                    songId: currentSong?.id || "",
+                    songId: selectedSong?.id || "",
                     steps: localTransposeSteps - 1,
                   })
                 }
@@ -1347,7 +1403,7 @@ function MemberView({
                 aria-label="Transpose up one semitone"
                 onClick={() =>
                   setChordTranspose({
-                    songId: currentSong?.id || "",
+                    songId: selectedSong?.id || "",
                     steps: localTransposeSteps + 1,
                   })
                 }
@@ -1359,7 +1415,10 @@ function MemberView({
                 className="btn-secondary !min-h-10 text-xs"
                 disabled={localTransposeSteps === 0}
                 onClick={() =>
-                  setChordTranspose({ songId: currentSong?.id || "", steps: 0 })
+                  setChordTranspose({
+                    songId: selectedSong?.id || "",
+                    steps: 0,
+                  })
                 }
               >
                 Reset
@@ -1367,7 +1426,7 @@ function MemberView({
             </div>
           </div>
           <ChordSheet
-            source={currentSong?.chordSheet || ""}
+            source={selectedSong?.chordSheet || ""}
             steps={chordSteps}
             preferFlats={displayedChordKey.includes("b")}
           />
