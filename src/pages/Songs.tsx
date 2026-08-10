@@ -6,6 +6,7 @@ import {
   Modal,
   ModernSelect,
   PageHeader,
+  Pagination,
 } from "../components/ui";
 import { endpoints } from "../lib/api";
 import type { Cue, Song, SongSection } from "../types";
@@ -27,6 +28,7 @@ const blank = (): Song => ({
   chordSheet: "",
   sections: [section()],
 });
+const pageSize = 5;
 
 export function Songs() {
   const { show } = useToast();
@@ -36,24 +38,41 @@ export function Songs() {
   const [edit, setEdit] = useState<Song | null>(null);
   const [remove, setRemove] = useState<Song | null>(null);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [chordEditorOpen, setChordEditorOpen] = useState(false);
   useEffect(() => {
+    let cancelled = false;
     const timer = window.setTimeout(() => {
       setLoading(true);
       endpoints
-        .songs(search)
-        .then((data) => setSongs(data || []))
+        .songsPage(search, page, pageSize)
+        .then((data) => {
+          if (cancelled) return;
+          setSongs(data.items || []);
+          setTotalItems(data.total);
+          if (data.totalPages > 0 && page > data.totalPages)
+            setPage(data.totalPages);
+        })
         .catch((e) => {
+          if (cancelled) return;
           setSongs([]);
+          setTotalItems(0);
           show(
             e instanceof Error ? e.message : "Failed to load songs",
             "error",
           );
         })
-        .finally(() => setLoading(false));
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
     }, 250);
-    return () => window.clearTimeout(timer);
-  }, [search, show]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [page, refreshKey, search, show]);
   useEffect(() => {
     endpoints
       .cues()
@@ -113,10 +132,9 @@ export function Songs() {
             ),
           });
       setSongs((current) =>
-        edit.id
-          ? current.map((x) => (x.id === saved.id ? saved : x))
-          : [...current, saved].sort((a, b) => a.title.localeCompare(b.title)),
+        edit.id ? current.map((x) => (x.id === saved.id ? saved : x)) : current,
       );
+      setRefreshKey((current) => current + 1);
       setEdit(null);
       setChordEditorOpen(false);
       show("Song saved");
@@ -165,7 +183,10 @@ export function Songs() {
           className="field !pl-11"
           placeholder="Search title or artist..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(1);
+          }}
         />
       </label>
       {!loading && !songs.length ? (
@@ -225,6 +246,14 @@ export function Songs() {
           ))}
         </div>
       )}
+      {!loading && (
+        <Pagination
+          page={page}
+          totalItems={totalItems}
+          pageSize={pageSize}
+          onPageChange={setPage}
+        />
+      )}
       <Modal
         open={!!edit}
         title={edit?.id ? "Edit song" : "Add song"}
@@ -276,20 +305,28 @@ export function Songs() {
                   checked={chordEditorOpen}
                   onChange={(event) => setChordEditorOpen(event.target.checked)}
                 />
-                Create chord sheet <span className="text-xs font-normal muted">(optional)</span>
+                Create chord sheet{" "}
+                <span className="text-xs font-normal muted">(optional)</span>
               </label>
               {chordEditorOpen && (
                 <div className="mt-4">
-                  <label htmlFor="song-chord-sheet" className="label">Chords and lyrics</label>
+                  <label htmlFor="song-chord-sheet" className="label">
+                    Chords and lyrics
+                  </label>
                   <p className="mb-2 text-xs muted">
-                    Put each chord inside braces. Example: {"{C}"}Ku memuji {"{G/B}"}nama-Mu
+                    Put each chord inside braces. Example: {"{C}"}Ku memuji{" "}
+                    {"{G/B}"}nama-Mu
                   </p>
                   <textarea
                     id="song-chord-sheet"
                     className="field min-h-64 resize-y font-mono leading-relaxed"
-                    placeholder={"{C}Verse 1\n{C}Ku memuji {G}nama-Mu\n{Am}Dengan segenap {F}hatiku"}
+                    placeholder={
+                      "{C}Verse 1\n{C}Ku memuji {G}nama-Mu\n{Am}Dengan segenap {F}hatiku"
+                    }
                     value={edit.chordSheet}
-                    onChange={(event) => setEdit({ ...edit, chordSheet: event.target.value })}
+                    onChange={(event) =>
+                      setEdit({ ...edit, chordSheet: event.target.value })
+                    }
                   />
                 </div>
               )}
@@ -366,6 +403,11 @@ export function Songs() {
           try {
             await endpoints.deleteSong(remove.id);
             setSongs((x) => x.filter((s) => s.id !== remove.id));
+            const nextTotal = Math.max(0, totalItems - 1);
+            const nextLastPage = Math.max(1, Math.ceil(nextTotal / pageSize));
+            setTotalItems(nextTotal);
+            if (page > nextLastPage) setPage(nextLastPage);
+            else setRefreshKey((current) => current + 1);
             setRemove(null);
             show("Song deleted", "warning");
           } catch (e) {

@@ -4,6 +4,13 @@ const API_URL = (
 export const roomEventsUrl = (roomId: string) =>
   `${API_URL}/rooms/${encodeURIComponent(roomId)}/events`;
 export type LiveKitConnection = { url: string; token: string };
+export type Paginated<T> = {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
 
 type Envelope<T> = { data: T };
 
@@ -146,6 +153,10 @@ export const endpoints = {
     }),
   deleteMember: (id: string) => api(`/members/${id}`, { method: "DELETE" }),
   cues: () => api<import("../types").Cue[]>("/cues"),
+  cuesPage: (page: number, pageSize: number) =>
+    api<Paginated<import("../types").Cue>>(
+      `/cues?page=${page}&pageSize=${pageSize}`,
+    ),
   createCue: (
     cue: Omit<import("../types").Cue, "id"> & { sortOrder: number },
   ) =>
@@ -162,6 +173,10 @@ export const endpoints = {
   songs: (search = "") =>
     api<import("../types").Song[]>(
       `/songs${search ? `?search=${encodeURIComponent(search)}` : ""}`,
+    ),
+  songsPage: (search: string, page: number, pageSize: number) =>
+    api<Paginated<import("../types").Song>>(
+      `/songs?page=${page}&pageSize=${pageSize}${search ? `&search=${encodeURIComponent(search)}` : ""}`,
     ),
   createSong: (song: {
     title: string;

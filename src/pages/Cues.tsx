@@ -1,16 +1,56 @@
 import { ArrowDown, ArrowUp, Eye, Plus, Trash2, Zap } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
-import { ConfirmModal, Modal, ModernSelect, PageHeader } from "../components/ui";
+import {
+  ConfirmModal,
+  Modal,
+  ModernSelect,
+  PageHeader,
+  Pagination,
+} from "../components/ui";
 import { useToast } from "../contexts/AppContexts";
 import type { Cue } from "../types";
 import { endpoints } from "../lib/api";
-const channels = ["All Team", "Band", "Vocal", "Production", "Multimedia", "Sound"];
+const channels = [
+  "All Team",
+  "Band",
+  "Vocal",
+  "Production",
+  "Multimedia",
+  "Sound",
+];
+const pageSize = 5;
 export function Cues() {
   const { show } = useToast();
   const [list, setList] = useState<Cue[]>([]);
-  // Toast callback is intentionally excluded to avoid refetching on every render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { endpoints.cues().then(data => setList(data || [])).catch(error => show(error instanceof Error ? error.message : "Gagal memuat cue", "error")); }, []);
+  const [page, setPage] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    endpoints
+      .cuesPage(page, pageSize)
+      .then((data) => {
+        if (cancelled) return;
+        setList(data.items || []);
+        setTotalItems(data.total);
+        if (data.totalPages > 0 && page > data.totalPages)
+          setPage(data.totalPages);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setList([]);
+        setTotalItems(0);
+        show(
+          error instanceof Error ? error.message : "Gagal memuat cue",
+          "error",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Toast callback is intentionally excluded to avoid refetching on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, refreshKey]);
   const [edit, setEdit] = useState<Cue | null>(null);
   const [preview, setPreview] = useState<Cue | null>(null);
   const [remove, setRemove] = useState<Cue | null>(null);
@@ -37,12 +77,42 @@ export function Cues() {
     };
     try {
       const saved = edit.id
-        ? await endpoints.updateCue({ ...next, sortOrder: list.findIndex(c => c.id === edit.id) + 1 })
-        : await endpoints.createCue({ label: next.label, category: next.category, priority: next.priority, channel: next.channel, vibration: next.vibration, active: next.active, sortOrder: list.length + 1 });
-      setList(current => edit.id ? current.map(cue => cue.id === saved.id ? saved : cue) : [...current, saved]);
+        ? await endpoints.updateCue({
+            ...next,
+            sortOrder:
+              (page - 1) * pageSize +
+              list.findIndex((c) => c.id === edit.id) +
+              1,
+          })
+        : await endpoints.createCue({
+            label: next.label,
+            category: next.category,
+            priority: next.priority,
+            channel: next.channel,
+            vibration: next.vibration,
+            active: next.active,
+            sortOrder: totalItems + 1,
+          });
+      setList((current) =>
+        edit.id
+          ? current.map((cue) => (cue.id === saved.id ? saved : cue))
+          : current,
+      );
+      if (!edit.id) {
+        const nextTotal = totalItems + 1;
+        const nextLastPage = Math.ceil(nextTotal / pageSize);
+        setTotalItems(nextTotal);
+        if (page === nextLastPage) setRefreshKey((current) => current + 1);
+        else setPage(nextLastPage);
+      }
       setEdit(null);
       show("Cue preset saved");
-    } catch (error) { show(error instanceof Error ? error.message : "Gagal menyimpan cue", "error"); }
+    } catch (error) {
+      show(
+        error instanceof Error ? error.message : "Gagal menyimpan cue",
+        "error",
+      );
+    }
   };
   return (
     <>
@@ -87,14 +157,24 @@ export function Cues() {
       </div>
       <div className="grid gap-3 lg:grid-cols-2">
         {list.map((c, i) => (
-          <article className={`surface flex items-center gap-3 p-4 ${c.active ? "" : "opacity-60"}`} key={c.id}>
+          <article
+            className={`surface flex items-center gap-3 p-4 ${c.active ? "" : "opacity-60"}`}
+            key={c.id}
+          >
             <span
               className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${c.priority === "Emergency" ? "bg-red-500/15 text-red-500" : "bg-brand-500/10 text-brand-500"}`}
             >
               <Zap size={19} />
             </span>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2"><h3 className="font-semibold">{c.label}</h3><span className={`chip text-[10px] ${c.active ? "bg-emerald-500/15 text-emerald-500" : "bg-slate-500/15 text-slate-500"}`}>{c.active ? "Active" : "Inactive"}</span></div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-semibold">{c.label}</h3>
+                <span
+                  className={`chip text-[10px] ${c.active ? "bg-emerald-500/15 text-emerald-500" : "bg-slate-500/15 text-slate-500"}`}
+                >
+                  {c.active ? "Active" : "Inactive"}
+                </span>
+              </div>
               <p className="truncate text-xs muted">
                 {c.category} • {c.channel} • {c.vibration}
               </p>
@@ -138,6 +218,12 @@ export function Cues() {
           </article>
         ))}
       </div>
+      <Pagination
+        page={page}
+        totalItems={totalItems}
+        pageSize={pageSize}
+        onPageChange={setPage}
+      />
       <Modal
         open={!!edit}
         title={edit?.id ? "Edit cue preset" : "Create cue preset"}
@@ -157,22 +243,64 @@ export function Cues() {
             <div className="grid grid-cols-2 gap-3">
               <label>
                 <span className="label">Category</span>
-                <ModernSelect name="category" defaultValue={edit.category} options={["Song Structure", "Dynamic", "Direction", "Emergency", "Production"].map(value => ({ value }))} />
+                <ModernSelect
+                  name="category"
+                  defaultValue={edit.category}
+                  options={[
+                    "Song Structure",
+                    "Dynamic",
+                    "Direction",
+                    "Emergency",
+                    "Production",
+                  ].map((value) => ({ value }))}
+                />
               </label>
               <label>
                 <span className="label">Priority</span>
-                <ModernSelect name="priority" defaultValue={edit.priority} options={["Normal", "High", "Emergency"].map(value => ({ value }))} />
+                <ModernSelect
+                  name="priority"
+                  defaultValue={edit.priority}
+                  options={["Normal", "High", "Emergency"].map((value) => ({
+                    value,
+                  }))}
+                />
               </label>
               <label>
                 <span className="label">Target channel</span>
-                <ModernSelect name="channel" defaultValue={edit.channel} options={channels.map(value => ({ value }))} />
+                <ModernSelect
+                  name="channel"
+                  defaultValue={edit.channel}
+                  options={channels.map((value) => ({ value }))}
+                />
               </label>
               <label>
                 <span className="label">Vibration pattern</span>
-                <ModernSelect name="vibration" defaultValue={edit.vibration} options={["Short pulse", "Double pulse", "Long pulse", "None"].map(value => ({ value }))} />
+                <ModernSelect
+                  name="vibration"
+                  defaultValue={edit.vibration}
+                  options={[
+                    "Short pulse",
+                    "Double pulse",
+                    "Long pulse",
+                    "None",
+                  ].map((value) => ({ value }))}
+                />
               </label>
             </div>
-            <label className="flex items-center justify-between rounded-xl border p-3"><span><b className="block text-sm">Active preset</b><span className="text-xs muted">Only active presets appear inside live rooms.</span></span><input type="checkbox" name="active" defaultChecked={edit.active} className="h-5 w-5 accent-cyan-500" /></label>
+            <label className="flex items-center justify-between rounded-xl border p-3">
+              <span>
+                <b className="block text-sm">Active preset</b>
+                <span className="text-xs muted">
+                  Only active presets appear inside live rooms.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                name="active"
+                defaultChecked={edit.active}
+                className="h-5 w-5 accent-cyan-500"
+              />
+            </label>
             <button className="btn-primary w-full">Save preset</button>
           </form>
         )}
@@ -203,7 +331,23 @@ export function Cues() {
         description={`Remove ${remove?.label} from your quick cues.`}
         onClose={() => setRemove(null)}
         onConfirm={async () => {
-          if (!remove) return; try { await endpoints.deleteCue(remove.id); setList(x => x.filter(c => c.id !== remove.id)); setRemove(null); show("Cue removed", "warning"); } catch (error) { show(error instanceof Error ? error.message : "Gagal menghapus cue", "error"); }
+          if (!remove) return;
+          try {
+            await endpoints.deleteCue(remove.id);
+            setList((x) => x.filter((c) => c.id !== remove.id));
+            const nextTotal = Math.max(0, totalItems - 1);
+            const nextLastPage = Math.max(1, Math.ceil(nextTotal / pageSize));
+            setTotalItems(nextTotal);
+            if (page > nextLastPage) setPage(nextLastPage);
+            else setRefreshKey((current) => current + 1);
+            setRemove(null);
+            show("Cue removed", "warning");
+          } catch (error) {
+            show(
+              error instanceof Error ? error.message : "Gagal menghapus cue",
+              "error",
+            );
+          }
         }}
       />
     </>

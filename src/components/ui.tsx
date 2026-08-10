@@ -12,6 +12,8 @@ import {
   AlertTriangle,
   LoaderCircle,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useTheme, useToast } from "../contexts/AppContexts";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -353,14 +355,158 @@ export function DeviceResult({ status }: { status: string }) {
 }
 export { WifiOff };
 
+export function Pagination({
+  page,
+  totalItems,
+  onPageChange,
+  pageSize = 5,
+}: {
+  page: number;
+  totalItems: number;
+  onPageChange: (page: number) => void;
+  pageSize?: number;
+}) {
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const currentPage = Math.min(Math.max(page, 1), totalPages);
+  if (totalPages <= 1) return null;
+
+  const firstVisiblePage = Math.max(
+    1,
+    Math.min(currentPage - 2, totalPages - 4),
+  );
+  const visiblePages = Array.from(
+    { length: Math.min(5, totalPages) },
+    (_, index) => firstVisiblePage + index,
+  );
+  const goToPage = (nextPage: number) =>
+    onPageChange(Math.min(Math.max(nextPage, 1), totalPages));
+
+  return (
+    <nav
+      className="mt-6 flex flex-wrap items-center justify-center gap-2"
+      aria-label="Pagination"
+    >
+      <button
+        type="button"
+        className="btn-secondary !h-10 !w-10 !min-h-0 !p-0"
+        aria-label="Previous page"
+        disabled={currentPage === 1}
+        onClick={() => goToPage(currentPage - 1)}
+      >
+        <ChevronLeft size={17} />
+      </button>
+      {visiblePages.map((pageNumber) => (
+        <button
+          type="button"
+          className={`btn !h-10 !w-10 !min-h-0 !p-0 ${
+            pageNumber === currentPage
+              ? "bg-brand-500 text-slate-950"
+              : "border hover:bg-slate-100 dark:hover:bg-slate-900"
+          }`}
+          aria-label={`Go to page ${pageNumber}`}
+          aria-current={pageNumber === currentPage ? "page" : undefined}
+          key={pageNumber}
+          onClick={() => goToPage(pageNumber)}
+        >
+          {pageNumber}
+        </button>
+      ))}
+      <button
+        type="button"
+        className="btn-secondary !h-10 !w-10 !min-h-0 !p-0"
+        aria-label="Next page"
+        disabled={currentPage === totalPages}
+        onClick={() => goToPage(currentPage + 1)}
+      >
+        <ChevronRight size={17} />
+      </button>
+      <span className="ml-1 text-xs muted">
+        Page {currentPage} of {totalPages}
+      </span>
+    </nav>
+  );
+}
+
 export type SelectOption = { value: string; label?: string };
-export function ModernSelect({ options, name, value, defaultValue, onValueChange, className = "", disabled = false, ariaLabel }: { options: SelectOption[]; name?: string; value?: string | number; defaultValue?: string | number; onValueChange?: (value: string) => void; className?: string; disabled?: boolean; ariaLabel?: string }) {
-  const controlled = value !== undefined; const [internal, setInternal] = useState(String(value ?? defaultValue ?? options[0]?.value ?? "")); const [open, setOpen] = useState(false); const root = useRef<HTMLDivElement>(null); const selected = controlled ? String(value) : internal;
-  useEffect(() => { const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); }; window.addEventListener("pointerdown", close); return () => window.removeEventListener("pointerdown", close); }, []);
-  const choose = (next: string) => { if (!controlled) setInternal(next); onValueChange?.(next); setOpen(false); };
-  return <div ref={root} className={`relative ${className}`}>
-    {name && <input type="hidden" name={name} value={selected} />}
-    <button type="button" disabled={disabled} aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} className="field flex items-center justify-between !pr-3 text-left font-medium" onClick={() => setOpen(current => !current)}><span className="truncate">{options.find(option => option.value === selected)?.label || selected}</span><ChevronDown size={17} className={`shrink-0 text-brand-500 transition ${open ? "rotate-180" : ""}`} /></button>
-    {open && <div role="listbox" className="absolute z-[90] mt-2 max-h-64 w-full min-w-max overflow-y-auto rounded-xl border bg-white p-1.5 shadow-2xl dark:bg-slate-900">{options.map(option => <button type="button" role="option" aria-selected={selected === option.value} key={option.value} className={`flex min-h-10 w-full items-center justify-between gap-4 rounded-lg px-3 text-left text-sm transition ${selected === option.value ? "bg-brand-500 font-semibold text-slate-950" : "hover:bg-slate-100 dark:hover:bg-slate-800"}`} onClick={() => choose(option.value)}><span>{option.label || option.value}</span>{selected === option.value && <CheckCircle2 size={15} />}</button>)}</div>}
-  </div>;
+export function ModernSelect({
+  options,
+  name,
+  value,
+  defaultValue,
+  onValueChange,
+  className = "",
+  disabled = false,
+  ariaLabel,
+}: {
+  options: SelectOption[];
+  name?: string;
+  value?: string | number;
+  defaultValue?: string | number;
+  onValueChange?: (value: string) => void;
+  className?: string;
+  disabled?: boolean;
+  ariaLabel?: string;
+}) {
+  const controlled = value !== undefined;
+  const [internal, setInternal] = useState(
+    String(value ?? defaultValue ?? options[0]?.value ?? ""),
+  );
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const selected = controlled ? String(value) : internal;
+  useEffect(() => {
+    const close = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, []);
+  const choose = (next: string) => {
+    if (!controlled) setInternal(next);
+    onValueChange?.(next);
+    setOpen(false);
+  };
+  return (
+    <div ref={root} className={`relative ${className}`}>
+      {name && <input type="hidden" name={name} value={selected} />}
+      <button
+        type="button"
+        disabled={disabled}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="field flex items-center justify-between !pr-3 text-left font-medium"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="truncate">
+          {options.find((option) => option.value === selected)?.label ||
+            selected}
+        </span>
+        <ChevronDown
+          size={17}
+          className={`shrink-0 text-brand-500 transition ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          className="absolute z-[90] mt-2 max-h-64 w-full min-w-max overflow-y-auto rounded-xl border bg-white p-1.5 shadow-2xl dark:bg-slate-900"
+        >
+          {options.map((option) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={selected === option.value}
+              key={option.value}
+              className={`flex min-h-10 w-full items-center justify-between gap-4 rounded-lg px-3 text-left text-sm transition ${selected === option.value ? "bg-brand-500 font-semibold text-slate-950" : "hover:bg-slate-100 dark:hover:bg-slate-800"}`}
+              onClick={() => choose(option.value)}
+            >
+              <span>{option.label || option.value}</span>
+              {selected === option.value && <CheckCircle2 size={15} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
