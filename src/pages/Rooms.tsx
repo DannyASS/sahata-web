@@ -1,11 +1,43 @@
 import { Plus, Search } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { ConfirmModal, Modal, ModernSelect, PageHeader, RoomCard } from "../components/ui";
+import {
+  ConfirmModal,
+  Modal,
+  ModernSelect,
+  PageHeader,
+  RoomCard,
+} from "../components/ui";
 import { useAuth, useRoom, useToast } from "../contexts/AppContexts";
 import type { Song, WorshipRoom } from "../types";
 import { endpoints } from "../lib/api";
-const musicalKeys = ["C", "C#/Db", "D", "D#/Eb", "E", "F", "F#/Gb", "G", "G#/Ab", "A", "A#/Bb", "B", "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "A#m", "Bm"];
+const musicalKeys = [
+  "C",
+  "C#/Db",
+  "D",
+  "D#/Eb",
+  "E",
+  "F",
+  "F#/Gb",
+  "G",
+  "G#/Ab",
+  "A",
+  "A#/Bb",
+  "B",
+  "Cm",
+  "C#m",
+  "Dm",
+  "D#m",
+  "Em",
+  "Fm",
+  "F#m",
+  "Gm",
+  "G#m",
+  "Am",
+  "A#m",
+  "Bm",
+];
+const roomSongPageSize = 5;
 const blank: WorshipRoom = {
   id: "",
   name: "",
@@ -29,20 +61,113 @@ export function Rooms() {
   const [editing, setEditing] = useState<WorshipRoom | null>(null);
   const [songCatalog, setSongCatalog] = useState<Song[]>([]);
   const [roomSongQuery, setRoomSongQuery] = useState("");
+  const [roomSongPage, setRoomSongPage] = useState(1);
+  const [roomSongHasMore, setRoomSongHasMore] = useState(true);
+  const [excludedSongIds, setExcludedSongIds] = useState<string[]>([]);
   const [songsLoading, setSongsLoading] = useState(false);
   const [deleting, setDeleting] = useState<WorshipRoom | null>(null);
   const roomModalOpen = Boolean(editing);
   useEffect(() => {
     if (!canManage || !roomModalOpen) return;
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setSongsLoading(true);
-      endpoints.songs(roomSongQuery.trim()).then(data => setSongCatalog(data || [])).catch(error => {
-        setSongCatalog([]);
-        show(error instanceof Error ? error.message : "Gagal memuat daftar lagu", "error");
-      }).finally(() => setSongsLoading(false));
+      endpoints
+        .songsPage(
+          roomSongQuery.trim(),
+          roomSongPage,
+          roomSongPageSize,
+          excludedSongIds,
+          controller.signal,
+        )
+        .then((data) => {
+          setSongCatalog((current) => {
+            const next = roomSongPage === 1 ? [] : current;
+            const songs = [...next, ...(data.items || [])];
+            const seen = new Set<string>();
+            return songs.filter((song) => {
+              const id = String(song.id);
+              if (seen.has(id)) return false;
+              seen.add(id);
+              return true;
+            });
+          });
+          setRoomSongHasMore(data.page < data.totalPages);
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) return;
+          if (roomSongPage === 1) setSongCatalog([]);
+          show(
+            error instanceof Error ? error.message : "Gagal memuat daftar lagu",
+            "error",
+          );
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setSongsLoading(false);
+        });
     }, 300);
-    return () => window.clearTimeout(timer);
-  }, [canManage, roomModalOpen, roomSongQuery, show]);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    canManage,
+    excludedSongIds,
+    roomModalOpen,
+    roomSongPage,
+    roomSongQuery,
+    show,
+  ]);
+
+  const openRoomEditor = (room: WorshipRoom) => {
+    const selectedSongs = [...(room.songs || [])];
+    setEditing({ ...room, songs: selectedSongs });
+    setExcludedSongIds(selectedSongs.map((song) => String(song.id)));
+    setSongCatalog([]);
+    setRoomSongQuery("");
+    setRoomSongPage(1);
+    setRoomSongHasMore(true);
+  };
+
+  const closeRoomEditor = () => {
+    setEditing(null);
+    setExcludedSongIds([]);
+    setSongCatalog([]);
+    setRoomSongQuery("");
+    setRoomSongPage(1);
+    setRoomSongHasMore(true);
+    setSongsLoading(false);
+  };
+
+  const changeRoomSongSearch = (value: string) => {
+    setRoomSongQuery(value);
+    setSongCatalog([]);
+    setRoomSongPage(1);
+    setRoomSongHasMore(true);
+  };
+
+  const toggleRoomSong = (song: Song, checked: boolean) => {
+    setEditing((current) => {
+      if (!current) return current;
+      const songs = current.songs || [];
+      return {
+        ...current,
+        songs: checked
+          ? [
+              ...songs,
+              { ...song, selectedKey: song.selectedKey || song.defaultKey },
+            ]
+          : songs.filter((item) => String(item.id) !== String(song.id)),
+      };
+    });
+    if (!checked && excludedSongIds.includes(String(song.id))) {
+      setSongCatalog((current) =>
+        current.some((item) => String(item.id) === String(song.id))
+          ? current
+          : [song, ...current],
+      );
+    }
+  };
   const save = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!editing) return;
@@ -60,28 +185,65 @@ export function Rooms() {
       songs: editing.songs || [],
     };
     try {
-      const saved = editing.id ? await endpoints.updateRoom(room) : await endpoints.createRoom({ name: room.name, date: room.date, startTime: room.startTime, endTime: room.endTime, code: room.code, status: room.status, channels: room.channels, songs: room.songs });
-      setRooms(x => editing.id ? x.map(r => r.id === saved.id ? saved : r) : [saved, ...x]); setEditing(null); setRoomSongQuery(""); show(editing.id ? "Room updated" : "Room created");
-    } catch (error) { show(error instanceof Error ? error.message : "Gagal menyimpan room", "error"); }
+      const saved = editing.id
+        ? await endpoints.updateRoom(room)
+        : await endpoints.createRoom({
+            name: room.name,
+            date: room.date,
+            startTime: room.startTime,
+            endTime: room.endTime,
+            code: room.code,
+            status: room.status,
+            channels: room.channels,
+            songs: room.songs,
+          });
+      setRooms((x) =>
+        editing.id
+          ? x.map((r) => (r.id === saved.id ? saved : r))
+          : [saved, ...x],
+      );
+      closeRoomEditor();
+      show(editing.id ? "Room updated" : "Room created");
+    } catch (error) {
+      show(
+        error instanceof Error ? error.message : "Gagal menyimpan room",
+        "error",
+      );
+    }
   };
   const list = state.rooms.filter(
     (r) =>
       (filter === "All" || r.status === filter) &&
       r.name.toLowerCase().includes(query.toLowerCase()),
   );
+  const selectedRoomSongs = editing?.songs || [];
+  const selectedRoomSongIds = new Set(
+    selectedRoomSongs.map((song) => String(song.id)),
+  );
+  const normalizedRoomSongQuery = roomSongQuery.trim().toLowerCase();
+  const availableRoomSongs = songCatalog.filter(
+    (song) =>
+      !selectedRoomSongIds.has(String(song.id)) &&
+      (!normalizedRoomSongQuery ||
+        song.title.toLowerCase().includes(normalizedRoomSongQuery) ||
+        song.artist.toLowerCase().includes(normalizedRoomSongQuery)),
+  );
+  const roomSongOptions = [...selectedRoomSongs, ...availableRoomSongs];
   return (
     <>
       <PageHeader
         title="Worship Rooms"
         description="Plan, invite, and enter your ministry communication rooms."
-        action={canManage ?
-          <button
-            className="btn-primary"
-            onClick={() => setEditing({ ...blank, songs: [] })}
-          >
-            <Plus size={18} /> Create room
-          </button>
-        : undefined}
+        action={
+          canManage ? (
+            <button
+              className="btn-primary"
+              onClick={() => openRoomEditor(blank)}
+            >
+              <Plus size={18} /> Create room
+            </button>
+          ) : undefined
+        }
       />
       <div className="mb-5 flex flex-col gap-3 sm:flex-row">
         <label className="relative flex-1">
@@ -93,7 +255,14 @@ export function Rooms() {
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
-        <ModernSelect className="sm:w-44" options={["All", "Live", "Scheduled", "Completed"].map(value => ({ value }))} value={filter} onValueChange={setFilter} />
+        <ModernSelect
+          className="sm:w-44"
+          options={["All", "Live", "Scheduled", "Completed"].map((value) => ({
+            value,
+          }))}
+          value={filter}
+          onValueChange={setFilter}
+        />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         {list.map((r) => (
@@ -101,7 +270,7 @@ export function Rooms() {
             key={r.id}
             room={r}
             onJoin={() => nav(`/room/${r.id}`)}
-            onEdit={canManage ? () => setEditing({ ...r, songs: [...(r.songs || [])] }) : undefined}
+            onEdit={canManage ? () => openRoomEditor(r) : undefined}
             onDelete={canManage ? () => setDeleting(r) : undefined}
           />
         ))}
@@ -109,10 +278,13 @@ export function Rooms() {
       <Modal
         open={!!editing}
         title={editing?.id ? "Edit worship room" : "Create worship room"}
-        onClose={() => { setEditing(null); setRoomSongQuery(""); }}
+        onClose={closeRoomEditor}
       >
         {editing && (
-          <form onSubmit={save} className="scrollbar-hidden max-h-[78vh] space-y-4 overflow-y-auto pr-1">
+          <form
+            onSubmit={save}
+            className="scrollbar-hidden max-h-[78vh] space-y-4 overflow-y-auto pr-1"
+          >
             <label>
               <span className="label">Room name</span>
               <input
@@ -135,7 +307,13 @@ export function Rooms() {
               </label>
               <label>
                 <span className="label">Room code</span>
-                <input name="code" className="field" required defaultValue={editing.code} placeholder="SHT-2407" />
+                <input
+                  name="code"
+                  className="field"
+                  required
+                  defaultValue={editing.code}
+                  placeholder="SHT-2407"
+                />
               </label>
               <label>
                 <span className="label">Start</span>
@@ -156,9 +334,141 @@ export function Rooms() {
                 />
               </label>
             </div>
-            <label><span className="label">Status</span><ModernSelect name="status" options={["Scheduled", "Live", "Completed"].map(value => ({ value }))} defaultValue={editing.status} /></label>
-            <fieldset><legend className="label">Channels</legend><div className="flex flex-wrap gap-3">{["All Team", "Band", "Vocal", "Production", "Multimedia", "Sound"].map(c => <label key={c} className="flex gap-2 text-sm"><input type="checkbox" name="channels" value={c} defaultChecked={editing.channels.includes(c)} />{c}</label>)}</div></fieldset>
-            <fieldset><legend className="label">Songs for this room</legend><label className="relative mb-3 block"><Search className="absolute left-3 top-3.5 muted" size={17}/><input className="field !pl-10" value={roomSongQuery} onChange={event => setRoomSongQuery(event.target.value)} placeholder="Search song title..."/></label>{songsLoading ? <p className="rounded-xl border p-4 text-center text-sm muted">Searching songs...</p> : songCatalog.length ? <div className="scrollbar-hidden max-h-[180px] space-y-2 overflow-y-auto overscroll-contain rounded-xl border p-3">{songCatalog.map(song => { const selected = editing.songs?.find(item => String(item.id) === String(song.id)); const checked = Boolean(selected); const selectedKey = selected?.selectedKey || selected?.defaultKey || song.defaultKey; return <div key={song.id} className={`grid min-h-[70px] items-center gap-2 rounded-lg p-2 text-sm transition sm:grid-cols-[1fr_120px] ${checked ? "bg-brand-500/10 text-brand-500" : "hover:bg-slate-100 dark:hover:bg-slate-900"}`}><label className="flex cursor-pointer items-center gap-3"><input type="checkbox" checked={checked} onChange={event => setEditing(current => current ? { ...current, songs: event.target.checked ? [...(current.songs || []), { ...song, selectedKey: song.defaultKey }] : (current.songs || []).filter(item => String(item.id) !== String(song.id)) } : current)}/><span className="min-w-0"><b className="block truncate">{song.title}</b><span className="text-xs muted">{song.artist} • Default {song.defaultKey}</span></span></label>{checked && <ModernSelect ariaLabel={`Key for ${song.title}`} options={[...new Set([selectedKey, ...musicalKeys])].map(value => ({ value }))} value={selectedKey} onValueChange={value => setEditing(current => current ? { ...current, songs: (current.songs || []).map(item => String(item.id) === String(song.id) ? { ...item, selectedKey: value } : item) } : current)}/>}</div>; })}</div> : <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">{roomSongQuery.trim() ? "Lagu tidak ditemukan." : "Belum ada lagu. Tambahkan lagu dari menu Songs terlebih dahulu."}</p>}<p className="mt-2 text-xs muted">{editing.songs?.length || 0} song(s) selected</p></fieldset>
+            <label>
+              <span className="label">Status</span>
+              <ModernSelect
+                name="status"
+                options={["Scheduled", "Live", "Completed"].map((value) => ({
+                  value,
+                }))}
+                defaultValue={editing.status}
+              />
+            </label>
+            <fieldset>
+              <legend className="label">Channels</legend>
+              <div className="flex flex-wrap gap-3">
+                {[
+                  "All Team",
+                  "Band",
+                  "Vocal",
+                  "Production",
+                  "Multimedia",
+                  "Sound",
+                ].map((c) => (
+                  <label key={c} className="flex gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      name="channels"
+                      value={c}
+                      defaultChecked={editing.channels.includes(c)}
+                    />
+                    {c}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend className="label">Songs for this room</legend>
+              <label className="relative mb-3 block">
+                <Search className="absolute left-3 top-3.5 muted" size={17} />
+                <input
+                  className="field !pl-10"
+                  value={roomSongQuery}
+                  onChange={(event) => changeRoomSongSearch(event.target.value)}
+                  placeholder="Search song title..."
+                />
+              </label>
+              {roomSongOptions.length ? (
+                <div
+                  className="scrollbar-hidden max-h-[180px] space-y-2 overflow-y-auto overscroll-contain rounded-xl border p-3"
+                  onScroll={(event) => {
+                    const element = event.currentTarget;
+                    const nearBottom =
+                      element.scrollTop + element.clientHeight >=
+                      element.scrollHeight - 40;
+                    if (nearBottom && roomSongHasMore && !songsLoading) {
+                      setSongsLoading(true);
+                      setRoomSongPage((page) => page + 1);
+                    }
+                  }}
+                >
+                  {roomSongOptions.map((song) => {
+                    const selected = selectedRoomSongs.find(
+                      (item) => String(item.id) === String(song.id),
+                    );
+                    const checked = Boolean(selected);
+                    const selectedKey =
+                      selected?.selectedKey ||
+                      selected?.defaultKey ||
+                      song.defaultKey;
+                    return (
+                      <div
+                        key={song.id}
+                        className={`grid min-h-[70px] items-center gap-2 rounded-lg p-2 text-sm transition sm:grid-cols-[1fr_120px] ${checked ? "bg-brand-500/10 text-brand-500" : "hover:bg-slate-100 dark:hover:bg-slate-900"}`}
+                      >
+                        <label className="flex cursor-pointer items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(event) =>
+                              toggleRoomSong(song, event.target.checked)
+                            }
+                          />
+                          <span className="min-w-0">
+                            <b className="block truncate">{song.title}</b>
+                            <span className="text-xs muted">
+                              {song.artist} • Default {song.defaultKey}
+                            </span>
+                          </span>
+                        </label>
+                        {checked && (
+                          <ModernSelect
+                            ariaLabel={`Key for ${song.title}`}
+                            options={[
+                              ...new Set([selectedKey, ...musicalKeys]),
+                            ].map((value) => ({ value }))}
+                            value={selectedKey}
+                            onValueChange={(value) =>
+                              setEditing((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      songs: (current.songs || []).map(
+                                        (item) =>
+                                          String(item.id) === String(song.id)
+                                            ? { ...item, selectedKey: value }
+                                            : item,
+                                      ),
+                                    }
+                                  : current,
+                              )
+                            }
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                  {songsLoading && (
+                    <p className="py-2 text-center text-xs muted">
+                      Loading more songs...
+                    </p>
+                  )}
+                </div>
+              ) : songsLoading ? (
+                <p className="rounded-xl border p-4 text-center text-sm muted">
+                  Searching songs...
+                </p>
+              ) : (
+                <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">
+                  {roomSongQuery.trim()
+                    ? "Lagu tidak ditemukan."
+                    : "Belum ada lagu. Tambahkan lagu dari menu Songs terlebih dahulu."}
+                </p>
+              )}
+              <p className="mt-2 text-xs muted">
+                {selectedRoomSongs.length} song(s) selected
+              </p>
+            </fieldset>
             <button className="btn-primary w-full">Save room</button>
           </form>
         )}
@@ -170,8 +480,17 @@ export function Rooms() {
         onClose={() => setDeleting(null)}
         onConfirm={async () => {
           if (!deleting) return;
-          try { await endpoints.deleteRoom(deleting.id); setRooms(x => x.filter(r => r.id !== deleting.id)); setDeleting(null); show("Room deleted", "warning"); }
-          catch (error) { show(error instanceof Error ? error.message : "Gagal menghapus room", "error"); }
+          try {
+            await endpoints.deleteRoom(deleting.id);
+            setRooms((x) => x.filter((r) => r.id !== deleting.id));
+            setDeleting(null);
+            show("Room deleted", "warning");
+          } catch (error) {
+            show(
+              error instanceof Error ? error.message : "Gagal menghapus room",
+              "error",
+            );
+          }
         }}
       />
     </>

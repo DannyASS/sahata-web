@@ -174,10 +174,24 @@ export const endpoints = {
     api<import("../types").Song[]>(
       `/songs${search ? `?search=${encodeURIComponent(search)}` : ""}`,
     ),
-  songsPage: (search: string, page: number, pageSize: number) =>
-    api<Paginated<import("../types").Song>>(
-      `/songs?page=${page}&pageSize=${pageSize}${search ? `&search=${encodeURIComponent(search)}` : ""}`,
-    ),
+  songsPage: (
+    search: string,
+    page: number,
+    pageSize: number,
+    excludeIds: string[] = [],
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    if (search) params.set("search", search);
+    if (excludeIds.length) params.set("excludeIds", excludeIds.join(","));
+    return api<Paginated<import("../types").Song>>(
+      `/songs?${params.toString()}`,
+      { signal },
+    );
+  },
   createSong: (song: {
     title: string;
     artist: string;
